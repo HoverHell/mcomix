@@ -1,13 +1,16 @@
-- MComix README -
+MComix README
+=============
 
-=== About =====================================================================
+About 
+-----
 
   MComix is a user-friendly, customizable image viewer. It is specifically
   designed to handle comic books, but also serves as a generic viewer. It
   reads images in ZIP, RAR, 7Zip or tar archives as well as plain image files. It
   is written in Python and uses GTK+ through the PyGTK bindings.
 
-=== Installation ==============================================================
+Installation 
+------------
 
 
   Run "python setup.py install" as root. This will install MComix in the
@@ -48,7 +51,8 @@
   be written into mcomix-files.txt, and must be removed manually when MComix
   is to be uninstalled.
 
-=== Dependencies ==============================================================
+Dependencies 
+------------
 
   MComix needs Python 2.5, Setuptools 0.6, PyGTK 2.12 and PIL (Python
   Imaging Library) 1.1.5 or newer to function. It is possible to use
@@ -73,7 +77,8 @@
   To read PDF files, MComix can use the tools provided by mupdf, namely
   mutool and mudraw.
 
-=== Credits ===================================================================
+Credits 
+-------
 
   Thanks to everyone who have contributed translations, suggestions, bug
   reports, fixes and donations!
@@ -83,9 +88,8 @@
   Project. Most other icons are made by Victor Castillejo, creator of the
   GNOME-Colors icon theme.
 
-=== Contact ===================================================================
+Contact 
+-------
 
   Lead Developer: Louis Casillas <oxaric@gmail.com>
   https://sourceforge.net/p/mcomix/wiki/
-
-===============================================================================

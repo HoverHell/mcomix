@@ -6,7 +6,6 @@ import gtk
 import gobject
 import PIL.Image as Image
 import PIL.ImageDraw as ImageDraw
-import pkg_resources
 
 from mcomix.preferences import prefs
 from mcomix import thumbnail_view
@@ -34,8 +33,11 @@ class _BookArea(gtk.ScrolledWindow):
     covers are displayed.
     """
 
+    # Thumbnail border width in pixels.
+    _BORDER_SIZE = 1
+
     def __init__(self, library):
-        gtk.ScrolledWindow.__init__(self)
+        super(_BookArea, self).__init__()
 
         self._library = library
         self._cache = get_pixbuf_cache()
@@ -56,13 +58,13 @@ class _BookArea(gtk.ScrolledWindow):
         self._liststore.set_sort_func(constants.SORT_PATH, self._sort_by_path, None)
         self.set_sort_order()
         self._liststore.connect('row-inserted', self._icon_added)
-        self._iconview = thumbnail_view.ThumbnailIconView(self._liststore)
-        self._iconview.set_pixbuf_column(0)
-        self._iconview.pixbuf_column = 0
-        self._iconview.status_column = 5
+        self._iconview = thumbnail_view.ThumbnailIconView(
+            self._liststore,
+            1, # UID
+            0, # pixbuf
+            5, # status
+        )
         self._iconview.generate_thumbnail = self._get_pixbuf
-        self._iconview.get_file_path_from_model = lambda model, iter: \
-                model.get_value(iter, 2).decode('utf-8')
         self._iconview.connect('item_activated', self._book_activated)
         self._iconview.connect('selection_changed', self._selection_changed)
         self._iconview.connect_after('drag_begin', self._drag_begin)
@@ -80,6 +82,10 @@ class _BookArea(gtk.ScrolledWindow):
             gtk.gdk.ACTION_COPY | gtk.gdk.ACTION_MOVE)
         self._iconview.set_selection_mode(gtk.SELECTION_MULTIPLE)
         self.add(self._iconview)
+
+        self._iconview.set_margin(0)
+        self._iconview.set_row_spacing(0)
+        self._iconview.set_column_spacing(0)
 
         self._ui_manager = gtk.UIManager()
         self._tooltipstatus = status.TooltipStatusHelper(self._ui_manager,
@@ -240,7 +246,8 @@ class _BookArea(gtk.ScrolledWindow):
         for book in books:
             # Fill the liststore with a filler pixbuf.
             self._liststore.append([filler, book.id,
-                book.path.encode('utf-8'), book.size, book.added, False])
+                                    book.path.encode('utf-8'),
+                                    book.size, book.added, False])
 
         self._iconview.draw_thumbnails_on_screen()
 
@@ -362,9 +369,9 @@ class _BookArea(gtk.ScrolledWindow):
     def _icon_added(self, model, path, iter, *args):
         """ Justifies the alignment of all cell renderers when new data is
         added to the model. """
-        # FIXME Setting the alignment for all cells each time something
-        # is added seems rather wasteful. Find better way to do this.
+        width, height = self._pixbuf_size()
         for cell in self._iconview.get_cells():
+            cell.set_fixed_size(width, height)
             cell.set_alignment(0.5, 0.5)
 
     def _book_size_changed(self, old, current):
@@ -413,18 +420,24 @@ class _BookArea(gtk.ScrolledWindow):
             collection = self._library.collection_area.get_current_collection()
             gobject.idle_add(self.display_covers, collection)
 
-    def _get_pixbuf(self, path, model_path):
-        """ Get or create the thumbnail for the selected book at <path>. """
-        if self._cache.exists(path):
-            pixbuf = self._cache.get(path)
+    def _pixbuf_size(self, border_size=_BORDER_SIZE):
+        # Don't forget the extra pixels for the border!
+        # The ratio (0.67) is just above the normal aspect ratio for books.
+        return (int(0.67 * prefs['library cover size']) + 2 * border_size,
+                prefs['library cover size'] + 2 * border_size)
+
+    def _get_pixbuf(self, uid):
+        """ Get or create the thumbnail for the selected book <uid>. """
+        assert isinstance(uid, int)
+        book = self._library.backend.get_book_by_id(uid)
+        if self._cache.exists(book.path):
+            pixbuf = self._cache.get(book.path)
         else:
-            pixbuf = self._library.backend.get_book_thumbnail(path) or constants.MISSING_IMAGE_ICON
-            # The ratio (0.67) is just above the normal aspect ratio for books.
-            pixbuf = image_tools.fit_in_rectangle(pixbuf,
-                int(0.67 * prefs['library cover size']),
-                prefs['library cover size'], True)
+            width, height = self._pixbuf_size(border_size=0)
+            pixbuf = self._library.backend.get_book_thumbnail(book.path) or image_tools.MISSING_IMAGE_ICON
+            pixbuf = image_tools.fit_in_rectangle(pixbuf, width, height, scale_up=True)
             pixbuf = image_tools.add_border(pixbuf, 1, 0xFFFFFFFF)
-            self._cache.add(path, pixbuf)
+            self._cache.add(book.path, pixbuf)
 
         # Display indicator of having finished reading the book.
         # This information isn't cached in the pixbuf cache, as it changes frequently.
@@ -433,15 +446,12 @@ class _BookArea(gtk.ScrolledWindow):
         if prefs['library cover size'] < 50:
             return pixbuf
 
-        book = self._library.backend.get_book_by_path(path)
         last_read_page = book.get_last_read_page()
-
         if last_read_page is None or last_read_page != book.pages:
             return pixbuf
-        if last_read_page == book.pages:
-            book_pixbuf = self.render_icon(gtk.STOCK_APPLY, gtk.ICON_SIZE_LARGE_TOOLBAR)
 
         # Composite icon on the lower right corner of the book cover pixbuf.
+        book_pixbuf = self.render_icon(gtk.STOCK_APPLY, gtk.ICON_SIZE_LARGE_TOOLBAR)
         translation_x = pixbuf.get_width() - book_pixbuf.get_width() - 1
         translation_y = pixbuf.get_height() - book_pixbuf.get_height() - 1
         book_pixbuf.composite(pixbuf, translation_x, translation_y,
@@ -453,10 +463,11 @@ class _BookArea(gtk.ScrolledWindow):
 
     def _get_empty_thumbnail(self):
         """ Create an empty filler pixmap. """
+        width, height = self._pixbuf_size()
         pixbuf = gtk.gdk.Pixbuf(colorspace=gtk.gdk.COLORSPACE_RGB,
-                has_alpha=True,
-                bits_per_sample=8,
-                width=int(0.67 * prefs['library cover size']), height=prefs['library cover size'])
+                                has_alpha=True,
+                                bits_per_sample=8,
+                                width=width, height=height)
 
         # Make the pixbuf transparent.
         pixbuf.fill(0)
@@ -564,7 +575,7 @@ class _BookArea(gtk.ScrolledWindow):
                     # of a single file
                     os.remove(book_path)
                 except Exception:
-                    log.error(_('! Could not remove file "%s"') % book_path)
+                    log.error(_('! Could not remove file "%s"'), book_path)
 
     def _copy_selected(self, *args):
         """ Copies the currently selected item to clipboard. """
@@ -641,7 +652,7 @@ class _BookArea(gtk.ScrolledWindow):
 
         cover = self._library.backend.get_book_cover(book)
         if cover is None:
-            cover = constants.MISSING_IMAGE_ICON
+            cover = image_tools.MISSING_IMAGE_ICON
 
         cover = cover.scale_simple(max(0, cover.get_width() // 2),
             max(0, cover.get_height() // 2), prefs['scaling quality'])

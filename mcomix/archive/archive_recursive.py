@@ -11,6 +11,7 @@ import os
 class RecursiveArchive(archive_base.BaseArchive):
 
     def __init__(self, archive, destination_dir):
+        super(RecursiveArchive, self).__init__(archive.archive)
         self._main_archive = archive
         self._destination_dir = destination_dir
         self._archive_list = []
@@ -26,31 +27,42 @@ class RecursiveArchive(archive_base.BaseArchive):
     def _iter_contents(self, archive, root=None):
         self._archive_list.append(archive)
         self._archive_root[archive] = root
-        supported_archive_regexp = archive_tools.get_supported_archive_regex()
+        sub_archive_list = []
         for f in archive.iter_contents():
-            if supported_archive_regexp.search(f):
-                # Extract sub-archive.
-                destination_dir = os.path.join(self._destination_dir, 'sub-archives')
-                if root is not None:
-                    destination_dir = os.path.join(destination_dir, root)
-                archive.extract(f, destination_dir)
-                # And open it and list its contents.
-                sub_archive_path = os.path.join(destination_dir, f)
-                sub_archive = archive_tools.get_archive_handler(sub_archive_path)
-                if sub_archive is None:
-                    log.warning('Non-supported archive format: %s' %
-                                os.path.basename(sub_archive_path))
-                    continue
-                sub_root = f
-                if root is not None:
-                    sub_root = os.path.join(root, sub_root)
-                for name in self._iter_contents(sub_archive, sub_root):
-                    yield name
-            else:
-                name = f
-                if root is not None:
-                    name = os.path.join(root, name)
-                self._entry_mapping[name] = (archive, f)
+            if archive_tools.is_archive_file(f):
+                # We found a sub-archive, don't try to extract it now, as we
+                # must finish listing the containing archive contents before
+                # any extraction can be done.
+                sub_archive_list.append(f)
+                continue
+            name = f
+            if root is not None:
+                name = os.path.join(root, name)
+            self._entry_mapping[name] = (archive, f)
+            yield name
+        for f in sub_archive_list:
+            # Extract sub-archive.
+            destination_dir = self._destination_dir
+            if root is not None:
+                destination_dir = os.path.join(destination_dir, root)
+            archive.extract(f, destination_dir)
+            sub_archive_ext = os.path.splitext(f)[1].lower()[1:]
+            sub_archive_path = os.path.join(
+                self._destination_dir, 'sub-archives',
+                '%04u.%s' % (len(self._archive_list), sub_archive_ext
+            ))
+            self._create_directory(os.path.dirname(sub_archive_path))
+            os.rename(os.path.join(destination_dir, f), sub_archive_path)
+            # And open it and list its contents.
+            sub_archive = archive_tools.get_archive_handler(sub_archive_path)
+            if sub_archive is None:
+                log.warning('Non-supported archive format: %s',
+                            os.path.basename(sub_archive_path))
+                continue
+            sub_root = f
+            if root is not None:
+                sub_root = os.path.join(root, sub_root)
+            for name in self._iter_contents(sub_archive, sub_root):
                 yield name
 
     def _check_concurrent_extraction_support(self):
@@ -87,6 +99,8 @@ class RecursiveArchive(archive_base.BaseArchive):
         root = self._archive_root[archive]
         if root is not None:
             destination_dir = os.path.join(destination_dir, root)
+        log.debug('extracting from %s to %s: %s',
+                  archive.archive, destination_dir, filename)
         archive.extract(name, destination_dir)
 
     def iter_extract(self, entries, destination_dir):
@@ -109,7 +123,7 @@ class RecursiveArchive(archive_base.BaseArchive):
             if root is not None:
                 archive_destination_dir = os.path.join(destination_dir, root)
             log.debug('extracting from %s to %s: %s',
-                      archive, archive_destination_dir,
+                      archive.archive, archive_destination_dir,
                       ' '.join(archive_wanted.keys()))
             for f in archive.iter_extract(archive_wanted.keys(), archive_destination_dir):
                 yield archive_wanted[f]

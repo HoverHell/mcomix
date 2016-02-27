@@ -41,6 +41,7 @@ class MagnifyingLens(object):
         if enabled:
             # FIXME: If no file is currently loaded, the cursor will still be hidden.
             self._window.cursor_handler.set_cursor_type(constants.NO_CURSOR)
+            self._window.osd.clear()
 
             if self._point:
                 self._draw_lens(*self._point)
@@ -92,7 +93,8 @@ class MagnifyingLens(object):
         lens_x = min(lens_x, max_width - width)
         lens_y = min(lens_y, max_height - height)
 
-        return lens_x, lens_y, width, height
+        # Don't forget 1 pixel border...
+        return lens_x, lens_y, width + 2, height + 2
 
     def _clear_lens(self, current_lens_region=None):
         """ Invalidates the area that was damaged by the last call to draw_lens.

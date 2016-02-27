@@ -3,22 +3,27 @@
     This file should only be imported after gettext has been correctly initialized
     and installed in the global namespace. """
 
-from mcomix.constants import ZIP, TAR, GZIP, BZIP2, RAR, SEVENZIP, LHA
+from mcomix.constants import ZIP, RAR, TAR, GZIP, BZIP2, XZ, PDF, SEVENZIP, LHA, ZIP_EXTERNAL
 
 ARCHIVE_DESCRIPTIONS = {
-                        ZIP:   _('ZIP archive'),
-                        TAR:   _('Tar archive'),
-                        GZIP:  _('Gzip compressed tar archive'),
-                        BZIP2: _('Bzip2 compressed tar archive'),
-                        RAR:   _('RAR archive'),
-                        SEVENZIP: _('7z archive'),
-                        LHA: _('LHA archive')
+                        ZIP         : _('ZIP archive'),
+                        RAR         : _('RAR archive'),
+                        TAR         : _('Tar archive'),
+                        GZIP        : _('Gzip compressed tar archive'),
+                        BZIP2       : _('Bzip2 compressed tar archive'),
+                        XZ          : _('XZ compressed tar archive'),
+                        PDF         : _('PDF document'),
+                        SEVENZIP    : _('7z archive'),
+                        LHA         : _('LHA archive'),
+                        ZIP_EXTERNAL: _('ZIP archive'),
                        }
 
 AUTHORS = (
             ('Pontus Ekberg', _('Original vision/developer of Comix')),
             ('Louis Casillas', _('MComix developer')),
-            ('Moritz Brunner', _('MComix developer'))
+            ('Moritz Brunner', _('MComix developer')),
+            ('Ark', _('MComix developer')),
+            ('Benoit Pierre', _('MComix developer')),
           )
 TRANSLATORS = (
             ('Emfox Zhou', _('Simplified Chinese translation')),
@@ -51,6 +56,7 @@ TRANSLATORS = (
             ('Евгений Лежнин', _('Russian translation')),
             ('Adrian C.', _('Croatian translation')),
             ('김민기', _('Korean translation')),
+            ('Gyeongmin Bak', _('Korean translation')),
             ('Maryam Sanaat', _('Persian translation')),
             ('Andhika Padmawan', _('Indonesian translation')),
             ('Jan Nekvasil', _('Czech translation')),

@@ -25,7 +25,7 @@ class _EditArchiveDialog(gtk.Dialog):
     """
 
     def __init__(self, window):
-        gtk.Dialog.__init__(self, _('Edit archive'), window, gtk.DIALOG_MODAL,
+        super(_EditArchiveDialog, self).__init__(_('Edit archive'), window, gtk.DIALOG_MODAL,
             (gtk.STOCK_CANCEL, gtk.RESPONSE_CANCEL))
 
         self._accept_changes_button = self.add_button(gtk.STOCK_APPLY, gtk.RESPONSE_APPLY)
@@ -41,7 +41,6 @@ class _EditArchiveDialog(gtk.Dialog):
         self._import_button.set_image(gtk.image_new_from_stock(gtk.STOCK_ADD,
             gtk.ICON_SIZE_BUTTON))
 
-        self.set_has_separator(False)
         self.set_border_width(4)
         self.resize(min(gtk.gdk.screen_get_default().get_width() - 50, 750),
             min(gtk.gdk.screen_get_default().get_height() - 50, 600))
@@ -86,7 +85,7 @@ class _EditArchiveDialog(gtk.Dialog):
         self._window.set_cursor(gtk.gdk.Cursor(gtk.gdk.WATCH))
 
         while gtk.events_pending():
-            gtk.main_iteration(False)
+            gtk.main_iteration_do(False)
 
         image_files = self._image_area.get_file_listing()
         comment_files = self._comment_area.get_file_listing()
@@ -152,6 +151,7 @@ class _EditArchiveDialog(gtk.Dialog):
                 os.path.basename(src_path))[0])
             dialog.filechooser.set_extra_widget(gtk.Label(
                 _('Archives are stored as ZIP files.')))
+            dialog.add_archive_filters()
             dialog.run()
 
             paths = dialog.get_paths()
@@ -163,6 +163,7 @@ class _EditArchiveDialog(gtk.Dialog):
         elif response == constants.RESPONSE_IMPORT:
 
             dialog = file_chooser_simple_dialog.SimpleFileChooserDialog()
+            dialog.add_image_filters()
             dialog.run()
             paths = dialog.get_paths()
             dialog.destroy()
@@ -212,21 +213,17 @@ class _EditArchiveDialog(gtk.Dialog):
             self._window.imagehandler._image_files = new_image_array
             self._window.imagehandler._raw_pixbufs = {}
             self._window.imagehandler.do_cacheing()
-
             self._window.thumbnailsidebar.clear()
-            self._window.thumbnailsidebar.load_thumbnails()
-
-            while self._window.imagehandler.is_cacheing and \
-                  not self._window.thumbnailsidebar._is_loading:
-                while gtk.events_pending():
-                    gtk.main_iteration(False)
-
             self._window.set_page(1)
-            self._window.thumbnailsidebar._selection_is_forced = False
+            self._window.thumbnailsidebar.load_thumbnails()
 
         else:
             _close_dialog()
             self.kill = True
+
+    def destroy(self):
+        self._image_area.cleanup()
+        gtk.Dialog.destroy(self)
 
 def open_dialog(action, window):
     global _dialog

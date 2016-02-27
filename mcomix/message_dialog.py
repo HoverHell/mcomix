@@ -16,6 +16,10 @@ class MessageDialog(gtk.MessageDialog):
         @param type: Dialog icon/type
         @param buttons: Dialog buttons. Can only be a predefined BUTTONS_XXX constant.
         """
+        if parent is None:
+            # Fix "mapped without a transient parent" Gtk warning.
+            from mcomix import main
+            parent = main.main_window()
         super(MessageDialog, self).__init__(parent=parent, flags=flags, type=type, buttons=buttons)
 
         #: Unique dialog identifier (for storing 'Do not ask again')
@@ -28,9 +32,7 @@ class MessageDialog(gtk.MessageDialog):
         self.remember_checkbox = gtk.CheckButton(_('Do not ask again.'))
         self.remember_checkbox.set_no_show_all(True)
         self.remember_checkbox.set_can_focus(False)
-        # FIXME: This really shouldn't depend on MessageDialog's internal layout implementation
-        labels_box = self.get_content_area().get_children()[0].get_children()[1]
-        labels_box.pack_end(self.remember_checkbox, padding=6)
+        self.get_message_area().pack_end(self.remember_checkbox, padding=6)
 
     def set_text(self, primary, secondary=None):
         """ Formats the dialog's text fields.

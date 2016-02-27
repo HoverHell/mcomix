@@ -169,7 +169,6 @@ class _KeybindingManager(object):
         @param args: List of arguments to pass to the callback
         @param kwargs: List of keyword arguments to pass to the callback.
         """
-        global BINDING_INFO
         assert name in BINDING_INFO, "'%s' isn't a valid keyboard action." % name
 
         # Load stored keybindings, or fall back to passed arguments
@@ -182,7 +181,7 @@ class _KeybindingManager(object):
                 if self._binding_to_action[keycode] != name:
                     log.warning(_('Keybinding for "%(action)s" overrides hotkey for another action.'),
                             {"action": name})
-                    log.warning('Binding %s overrides %r' % (keycode, self._binding_to_action[keycode]))
+                    log.warning('Binding %s overrides %r', keycode, self._binding_to_action[keycode])
             else:
                 self._binding_to_action[keycode] = name
                 self._action_to_bindings[name].append(keycode)
@@ -204,7 +203,6 @@ class _KeybindingManager(object):
         @return None: new_binding wasn't in any action
                 action name: where new_binding was before
         """
-        global BINDING_INFO
         assert name in BINDING_INFO, "'%s' isn't a valid keyboard action." % name
 
         nb = gtk.accelerator_parse(new_binding)
@@ -236,7 +234,6 @@ class _KeybindingManager(object):
 
     def clear_accel(self, name, binding):
         """ Remove binding for an action """
-        global BINDING_INFO
         assert name in BINDING_INFO, "'%s' isn't a valid keyboard action." % name
 
         ob = gtk.accelerator_parse(binding)
@@ -283,14 +280,14 @@ class _KeybindingManager(object):
                     gtk.accelerator_name(keyval, modifiers) for
                     (keyval, modifiers) in bindings
                 ]
-        fp = file(constants.KEYBINDINGS_CONF_PATH, "w")
+        fp = open(constants.KEYBINDINGS_CONF_PATH, "w")
         json.dump(action_to_keys, fp, indent=2)
         fp.close()
 
     def _initialize(self):
         """ Restore keybindings from disk. """
         try:
-            fp = file(constants.KEYBINDINGS_CONF_PATH, "r")
+            fp = open(constants.KEYBINDINGS_CONF_PATH, "r")
             stored_action_bindings = json.load(fp)
             fp.close()
         except Exception, e:

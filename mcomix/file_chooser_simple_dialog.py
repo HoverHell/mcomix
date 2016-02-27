@@ -13,20 +13,10 @@ class SimpleFileChooserDialog(file_chooser_base_dialog._BaseFileChooserDialog):
     """
 
     def __init__(self, action=gtk.FILE_CHOOSER_ACTION_OPEN):
-        file_chooser_base_dialog._BaseFileChooserDialog.__init__(self, action)
+        super(SimpleFileChooserDialog, self).__init__(action)
         if action == gtk.FILE_CHOOSER_ACTION_OPEN:
             self.filechooser.set_select_multiple(True)
         self._paths = None
-
-        ffilter = gtk.FileFilter()
-        ffilter.add_pixbuf_formats()
-        ffilter.set_name(_('All images'))
-        self.filechooser.add_filter(ffilter)
-        self.add_filter(_('JPEG images'), ('image/jpeg',), ('*.jpg', '*.jpeg'))
-        self.add_filter(_('PNG images'), ('image/png',), ('*.png',))
-        self.add_filter(_('GIF images'), ('image/gif',), ('*.gif',))
-        self.add_filter(_('TIFF images'), ('image/tiff',), ('*.tiff',))
-        self.add_filter(_('BMP images'), ('image/bmp',), ('*.bmp',))
 
     def get_paths(self):
         """Return the selected paths. To be called after run() has returned

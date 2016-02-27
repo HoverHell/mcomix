@@ -13,7 +13,6 @@ from mcomix.preferences import prefs
 from mcomix import archive_extractor
 from mcomix import archive_tools
 from mcomix import image_tools
-from mcomix import icons
 from mcomix import tools
 from mcomix import constants
 from mcomix import file_provider
@@ -37,8 +36,6 @@ class FileHandler(object):
         #: Indicates if files/archives are currently loaded/loading.
         self.file_loaded = False
         self.file_loading = False
-        #: Indicate if files/archives load has failed.
-        self.file_load_failed = False
         #: None if current file is not an archive, or unrecognized format.
         self.archive_type = None
 
@@ -50,7 +47,7 @@ class FileHandler(object):
         #: Path to opened archive file, or directory containing current images.
         self._base_path = None
         #: Temporary directory used for extracting archives.
-        self._tmp_dir = tempfile.mkdtemp(prefix=u'mcomix.', suffix=os.sep)
+        self._tmp_dir = None
         #: If C{True}, no longer wait for files to get extracted.
         self._stop_waiting = False
         #: List of comment files inside of the currently opened archive.
@@ -68,12 +65,10 @@ class FileHandler(object):
         #: Keeps track of the last read page in archives
         self.last_read_page = last_read_page.LastReadPage(backend.LibraryBackend())
         #: Regexp used for determining which archive files are images.
-        self._image_re = constants.SUPPORTED_IMAGE_REGEX
+        self._image_re = image_tools.SUPPORTED_IMAGE_REGEX
         #: Regexp used for determining which archive files are comment files.
         self._comment_re = None
         self.update_comment_extensions()
-        #: Forces call to window.draw_image (if loading is delayed by user interaction)
-        self._must_call_draw = False
 
         self.last_read_page.set_enabled(bool(prefs['store recent file info']))
 
@@ -98,6 +93,8 @@ class FileHandler(object):
         Return True if the file is successfully loaded.
         """
 
+        self._close()
+
         try:
             path = self._initialize_fileprovider(path, keep_fileprovider)
         except ValueError, ex:
@@ -105,144 +102,127 @@ class FileHandler(object):
             self._window.osd.show(unicode(ex))
             return False
 
-        if os.path.exists(path) and os.access(path, os.R_OK):
-            filelist = self._file_provider.list_files()
-            archive_type = archive_tools.archive_mime_type(path)
-        else:
-            filelist = []
-            archive_type = None
-
-        error_message = self._check_for_error_message(path, filelist, archive_type)
+        error_message = self._check_access(path)
         if error_message:
             self._window.statusbar.set_message(error_message)
             self._window.osd.show(error_message)
+            self.file_opened()
             return False
 
-        # We close the previously opened file.
-        if self.file_loaded:
-            self.close_file()
-
-        # Catch up on UI events before actually starting to open the file(s).
-        while gtk.events_pending():
-            gtk.main_iteration(False)
-
-        self.filelist = filelist
-        self.archive_type = archive_type
+        self.filelist = self._file_provider.list_files()
+        self.archive_type = archive_tools.archive_mime_type(path)
         self._start_page = start_page
         self._current_file = os.path.abspath(path)
         self._stop_waiting = False
 
-        result = False
         image_files = []
         current_image_index = 0
 
         # Actually open the file(s)/archive passed in path.
         if self.archive_type is not None:
             try:
-                self._open_archive(self._current_file, start_page)
+                self._open_archive(self._current_file)
             except Exception, ex:
-                self.file_loaded = False
-                self.file_loading = False
                 self._window.statusbar.set_message(unicode(ex))
                 self._window.osd.show(unicode(ex))
-                self._window.uimanager.set_sensitivities()
+                self.file_opened()
                 return False
             self.file_loading = True
         else:
             image_files, current_image_index = \
-                self._open_image_files(filelist, self._current_file)
-            self._archive_opened(image_files, current_image_index)
+                self._open_image_files(self.filelist, self._current_file)
+            self._archive_opened(image_files)
 
         return True
 
-    def _archive_opened(self, image_files, current_image_index):
+    def _archive_opened(self, image_files):
         """ Called once the archive has been opened and its contents listed.
         """
-        if self.archive_type is not None:
-            # Update status bar
-            archive_list = self._file_provider.list_files(
-                file_provider.FileProvider.ARCHIVES)
-            if self._current_file in archive_list:
-                current_index = archive_list.index(self._current_file)
-            else:
-                current_index = 0
 
-            self._window.statusbar.set_file_number(current_index + 1,
-                len(archive_list))
-        else:
-            # Update status bar (0 disables file numbers for images)
-            self._window.statusbar.set_file_number(0, 0)
+        self._window.imagehandler._base_path = self._base_path
+        self._window.imagehandler._image_files = image_files
+        self.file_opened()
 
         if not image_files:
-            self.file_loaded = False
-            self.file_load_failed = True
-            self._window.imagehandler._image_files = None
             msg = _("No images in '%s'") % os.path.basename(self._current_file)
             self._window.statusbar.set_message(msg)
             self._window.osd.show(msg)
 
-            result = False
-            self._window.uimanager.set_sensitivities()
-
         else:
-            self.file_loaded = True
-            self.file_load_failed = False
-            self._window.imagehandler._image_files = image_files
-            self._window.imagehandler._current_image_index = current_image_index
-            self._window.imagehandler._base_path = self._base_path
-            self._window.imagehandler._current_file = self._current_file
-            self._window.imagehandler._name_table = self._name_table
+            if self.archive_type is None:
+                # If no extraction is required, mark all files as available.
+                self.file_available(self.filelist)
+                # Set current page to current file.
+                if self._current_file in self.filelist:
+                    current_image_index = self.filelist.index(self._current_file)
+                else:
+                    current_image_index = 0
+            else:
+                last_image_index = self._get_index_for_page(self._start_page,
+                                                            len(image_files),
+                                                            self._current_file)
+                if self._start_page or \
+                   prefs['stored dialog choices'].get('resume-from-last-read-page', False):
+                    current_image_index = last_image_index
+                else:
+                    # Don't switch to last page yet; since we have not asked
+                    # the user for confirmation yet.
+                    current_image_index = 0
+                if last_image_index != current_image_index:
+                    # Bump last page closer to the front of the extractor queue.
+                    self._window.set_page(last_image_index + 1)
 
-            self._window.imagehandler.do_cacheing()
-            self._window.scroll_to_predefined((constants.SCROLL_TO_START,) * 2,
-                constants.FIRST_INDEX)
+            self._window.set_page(current_image_index + 1)
 
-            self._window.uimanager.set_sensitivities()
-            self._window.thumbnailsidebar.load_thumbnails()
-            self._window.uimanager.set_sensitivities()
+            if self.archive_type is not None:
+                self._extractor.extract()
+                if last_image_index != current_image_index and \
+                   self._ask_goto_last_read_page(self._current_file, last_image_index + 1):
+                    self._window.set_page(last_image_index + 1)
 
             self.write_fileinfo_file()
 
-            # If no extraction is required, mark all files as available instantly.
-            if self.archive_type is None:
-                self.file_available(self.filelist)
-
-        tools.alphanumeric_sort(self._comment_files)
-
         self._window.uimanager.recent.add(self._current_file)
-
-        if self._must_call_draw:
-            self._must_call_draw = False
-            self._window.draw_image()
-
-        self.file_opened()
 
     @callback.Callback
     def file_opened(self):
         """ Called when a new set of files has successfully been opened. """
-        pass
+        self.file_loaded = True
 
     @callback.Callback
-    def close_file(self, *args):
+    def file_closed(self):
+        """ Called when the current file has been closed. """
+        pass
+
+    def close_file(self):
+        """Close the currently opened file and its provider. """
+        self._close(close_provider=True)
+
+    def _close(self, close_provider=False):
         """Run tasks for "closing" the currently opened file(s)."""
-        self.update_last_read_page()
-        self.file_loaded = False
-        self.file_loading = False
-        self.archive_type = None
-        self._current_file = None
-        self._base_path = None
-        self._stop_waiting = True
-        self._comment_files = []
-        self._name_table.clear()
-        self._window.clear()
-        self._window.uimanager.set_sensitivities()
-        self._extractor.stop()
-        self.thread_delete(self._tmp_dir)
-        self._tmp_dir = tempfile.mkdtemp(prefix=u'mcomix.', suffix=os.sep)
-        self._window.imagehandler.close()
-        self._window.thumbnailsidebar.clear()
-        self._window.set_icon_list(*icons.mcomix_icons())
+        if self.file_loaded or self.file_loading:
+            if close_provider:
+                self._file_provider = None
+            self.update_last_read_page()
+            if self.archive_type is not None:
+                self._extractor.close()
+            self._window.imagehandler.cleanup()
+            self.file_loaded = False
+            self.file_loading = False
+            self.archive_type = None
+            self._current_file = None
+            self._base_path = None
+            self._stop_waiting = True
+            self._comment_files = []
+            self._name_table.clear()
+            self.file_closed()
+        # Catch up on UI events, so we don't leave idle callbacks.
+        while gtk.events_pending():
+            gtk.main_iteration_do(False)
         tools.garbage_collect()
+        if self._tmp_dir is not None:
+            self.thread_delete(self._tmp_dir)
+            self._tmp_dir = None
 
     def _initialize_fileprovider(self, path, keep_fileprovider):
         """ Creates the L{file_provider.FileProvider} for C{path}.
@@ -275,12 +255,10 @@ class FileHandler(object):
 
             return path
 
-    def _check_for_error_message(self, path, filelist, archive_type):
+    def _check_access(self, path):
         """ Checks for various error that could occur when opening C{path}.
 
         @param path: Path to file that should be opened.
-        @param filelist: List of files in the directory of C{path}.
-        @param archive_type: Archive type, if C{path} is an archive.
         @return: An appropriate error string, or C{None} if no error was found.
         """
         if not os.path.exists(path):
@@ -289,18 +267,10 @@ class FileHandler(object):
         elif not os.access(path, os.R_OK):
             return _('Could not open %s: Permission denied.') % path
 
-        elif archive_type is None and len(filelist) == 0:
-            return _("No images in '%s'") % path
-
-        elif (archive_type is None and
-            not image_tools.is_image_file(path) and
-            len(filelist) == 0):
-            return _('Could not open %s: Unknown file type.') % path
-
         else:
             return None
 
-    def _open_archive(self, path, start_page):
+    def _open_archive(self, path):
         """ Opens the archive passed in C{path}.
 
         Creates an L{archive_extractor.Extractor} and extracts all images
@@ -308,7 +278,7 @@ class FileHandler(object):
 
         @return: A tuple containing C{(image_files, image_index)}. """
 
-
+        self._tmp_dir = tempfile.mkdtemp(prefix=u'mcomix.', suffix=os.sep)
         self._base_path = path
         try:
             self._condition = self._extractor.setup(self._base_path,
@@ -330,46 +300,25 @@ class FileHandler(object):
             # Remove MacOS meta files from image list
             and not u'__MACOSX' in os.path.normpath(image).split(os.sep)]
 
-        archive_images = self._sort_archive_images(archive_images)
+        self._sort_archive_images(archive_images)
         image_files = [ os.path.join(self._tmp_dir, f)
                         for f in archive_images ]
 
         comment_files = filter(self._comment_re.search, files)
+        tools.alphanumeric_sort(comment_files)
         self._comment_files = [ os.path.join(self._tmp_dir, f)
                                 for f in comment_files ]
 
-        for name, full_path in zip(archive_images, image_files):
-            self._name_table[full_path] = name
-
-        for name, full_path in zip(comment_files, self._comment_files):
-            self._name_table[full_path] = name
-
-        # Determine current archive image index.
-        current_image_index = self._get_index_for_page(self._start_page,
-            len(image_files), self._current_file)
-
-        # Sort files to determine extraction order.
-        self._sort_archive_files(archive_images, current_image_index)
+        self._name_table = dict(zip(image_files, archive_images))
+        self._name_table.update(zip(self._comment_files, comment_files))
 
         self._extractor.set_files(archive_images + comment_files)
-        self._extractor.extract()
 
-        # Preemptively set _image files of ImageHandler, to prevent extraction callbacks
-        # from being ignored, as the ImageHandler needs the list of files
-        # to translate from file name to page index
-        self._window.imagehandler._image_files = image_files
-
-        # Image index may have changed after additional files were extracted.
-        # This call might block due to displaying a confirmation dialog.
-        current_image_index = self._get_index_for_page(self._start_page,
-            len(image_files), self._current_file, confirm=True)
-
-        self._archive_opened(image_files, current_image_index)
+        self._archive_opened(image_files)
 
     def _sort_archive_images(self, filelist):
         """ Sorts the image list passed in C{filelist} based on the sorting
-        preference option, and returns the newly sorted list. """
-        filelist = list(filelist)  # Create a copy of the list
+        preference option. """
 
         if prefs['sort archive by'] == constants.SORT_NAME:
             tools.alphanumeric_sort(filelist)
@@ -382,81 +331,45 @@ class FileHandler(object):
         if prefs['sort archive order'] == constants.SORT_DESCENDING:
             filelist.reverse()
 
-        return filelist
-
-    def _get_index_for_page(self, start_page, num_of_pages, path, confirm=False):
+    def _get_index_for_page(self, start_page, num_of_pages, path):
         """ Returns the page that should be displayed for an archive.
         @param start_page: If -1, show last page. If 0, show either first page
                            or last read page. If > 0, show C{start_page}.
         @param num_of_pages: Page count.
         @param path: Archive path.
         """
-        if start_page < 0 and self._window.is_double_page:
+        if start_page < 0 and prefs['default double page']:
             current_image_index = num_of_pages - 2
-        elif start_page < 0 and not self._window.is_double_page:
+        elif start_page < 0 and not prefs['default double page']:
             current_image_index = num_of_pages - 1
         elif start_page == 0:
-            if confirm:
-                current_image_index = self._get_last_read_page(path) - 1
-            else:
-                current_image_index = (self.last_read_page.get_page(path) or 1) - 1
+            current_image_index = (self.last_read_page.get_page(path) or 1) - 1
         else:
             current_image_index = start_page - 1
 
         return min(max(0, current_image_index), num_of_pages - 1)
 
-    def _get_last_read_page(self, path):
+    def _ask_goto_last_read_page(self, path, last_read_page):
         """ If the user read an archive previously, ask to continue from
         that time, or from page 1. This method returns a page index, that is,
         index + 1. """
-        if (isinstance(path, list) and len(path) > 0
-            and isinstance(path[0], (str, unicode))):
-            path = path[0]
 
-        last_read_page = self.last_read_page.get_page(path)
-        if last_read_page is not None:
-            read_date = self.last_read_page.get_date(path)
+        read_date = self.last_read_page.get_date(path)
 
-            dialog = message_dialog.MessageDialog(self._window, gtk.DIALOG_MODAL, gtk.MESSAGE_INFO,
-                gtk.BUTTONS_YES_NO)
-            dialog.set_should_remember_choice('resume-from-last-read-page',
-                (gtk.RESPONSE_YES, gtk.RESPONSE_NO))
-            dialog.set_text(
-                (_('Continue reading from page %d?') % last_read_page),
-                _('You stopped reading here on %(date)s, %(time)s. '
-                'If you choose "Yes", reading will resume on page %(page)d. Otherwise, '
-                'the first page will be loaded.') % {'date': read_date.date().strftime("%x"),
-                    'time': read_date.time().strftime("%X"), 'page': last_read_page})
-            result = dialog.run()
+        dialog = message_dialog.MessageDialog(self._window, gtk.DIALOG_MODAL, gtk.MESSAGE_INFO,
+            gtk.BUTTONS_YES_NO)
+        dialog.set_default_response(gtk.RESPONSE_YES)
+        dialog.set_should_remember_choice('resume-from-last-read-page',
+            (gtk.RESPONSE_YES, gtk.RESPONSE_NO))
+        dialog.set_text(
+            (_('Continue reading from page %d?') % last_read_page),
+            _('You stopped reading here on %(date)s, %(time)s. '
+            'If you choose "Yes", reading will resume on page %(page)d. Otherwise, '
+            'the first page will be loaded.') % {'date': read_date.date().strftime("%x"),
+                'time': read_date.time().strftime("%X"), 'page': last_read_page})
+        result = dialog.run()
 
-            self._must_call_draw = True
-
-            if result == gtk.RESPONSE_YES:
-                return last_read_page
-            else:
-                return 1
-        else:
-            return 1
-
-    def _sort_archive_files(self, archive_images, current_image_index):
-        """ Sorts the list C{archive_images} in place based on a priority order
-        algorithm. """
-
-        depth = self._window.is_double_page and 2 or 1
-
-        priority_ordering = (
-            range(current_image_index,
-                current_image_index + depth * 2) +
-            range(current_image_index - depth,
-                current_image_index)[::-1])
-
-        priority_ordering = [archive_images[p] for p in priority_ordering
-            if 0 <= p <= len(archive_images) - 1]
-
-        for i, name in enumerate(priority_ordering):
-            archive_images.remove(name)
-            archive_images.insert(i, name)
-
+        return result == gtk.RESPONSE_YES
 
     def _open_image_files(self, filelist, image_path):
         """ Opens all files passed in C{filelist}.
@@ -476,12 +389,16 @@ class FileHandler(object):
 
         return filelist, current_image_index
 
-    def cleanup(self):
-        """Run clean-up tasks. Should be called prior to exit."""
-        self._stop_waiting = True
-        self._extractor.stop()
-        self.thread_delete(self._tmp_dir)
-        self.update_last_read_page()
+    def get_file_number(self):
+        if self.archive_type is None:
+            # No file numbers for images.
+            return 0, 0
+        file_list = self._file_provider.list_files(file_provider.FileProvider.ARCHIVES)
+        if self._current_file in file_list:
+            current_index = file_list.index(self._current_file)
+        else:
+            current_index = 0
+        return current_index + 1, len(file_list)
 
     def get_number_of_comments(self):
         """Return the number of comments in the current archive."""
@@ -551,10 +468,7 @@ class FileHandler(object):
 
             for path in files[current_index + 1:]:
                 if archive_tools.archive_mime_type(path) is not None:
-                    self.close_file()
-                    self._window.imagehandler.close()
-                    self._window.scroll_to_predefined(
-                        (constants.SCROLL_TO_START,) * 2, constants.FIRST_INDEX)
+                    self._close()
                     self.open_file(path, keep_fileprovider=True)
                     return True
 
@@ -574,10 +488,7 @@ class FileHandler(object):
 
             for path in reversed(files[:current_index]):
                 if archive_tools.archive_mime_type(path) is not None:
-                    self.close_file()
-                    self._window.imagehandler.close()
-                    self._window.scroll_to_predefined(
-                        (constants.SCROLL_TO_END,) * 2, constants.LAST_INDEX)
+                    self._close()
                     self.open_file(path, -1, keep_fileprovider=True)
                     return True
 
@@ -587,50 +498,55 @@ class FileHandler(object):
         """ Opens the next sibling directory of the current file, as specified by
         file provider. Returns True if a new directory was opened and files found. """
 
+        if self._file_provider is None:
+            return
+
         if self.archive_type is not None:
             listmode = file_provider.FileProvider.ARCHIVES
         else:
             listmode = file_provider.FileProvider.IMAGES
 
         current_dir = self._file_provider.get_directory()
-        while self._file_provider.next_directory():
-            files = self._file_provider.list_files(listmode)
+        if not self._file_provider.next_directory():
+            # Restore current directory if no files were found
+            self._file_provider.set_directory(current_dir)
+            return False
 
-            if len(files) > 0:
-                self.close_file()
-                self._window.scroll_to_predefined(
-                    (constants.SCROLL_TO_START,) * 2, constants.FIRST_INDEX)
-                self.open_file(files[0], keep_fileprovider=True)
-                return True
-
-        # Restore current directory if no files were found
-        self._file_provider.set_directory(current_dir)
-        return False
+        files = self._file_provider.list_files(listmode)
+        self._close()
+        if len(files) > 0:
+            path = files[0]
+        else:
+            path = self._file_provider.get_directory()
+        self.open_file(path, keep_fileprovider=True)
+        return True
 
     def open_previous_directory(self, *args):
         """ Opens the previous sibling directory of the current file, as specified by
         file provider. Returns True if a new directory was opened and files found. """
 
+        if self._file_provider is None:
+            return
+
         if self.archive_type is not None:
             listmode = file_provider.FileProvider.ARCHIVES
         else:
             listmode = file_provider.FileProvider.IMAGES
 
         current_dir = self._file_provider.get_directory()
-        while self._file_provider.previous_directory():
-            files = self._file_provider.list_files(listmode)
+        if not self._file_provider.previous_directory():
+            # Restore current directory if no files were found
+            self._file_provider.set_directory(current_dir)
+            return False
 
-            if len(files) > 0:
-                self.close_file()
-                self._window.imagehandler.close()
-                self._window.scroll_to_predefined(
-                    (constants.SCROLL_TO_END,) * 2, constants.LAST_INDEX)
-                self.open_file(files[-1], -1, keep_fileprovider=True)
-                return True
-
-        # Restore current directory if no files were found
-        self._file_provider.set_directory(current_dir)
-        return False
+        files = self._file_provider.list_files(listmode)
+        self._close()
+        if len(files) > 0:
+            path = files[-1]
+        else:
+            path = self._file_provider.get_directory()
+        self.open_file(path, -1, keep_fileprovider=True)
+        return True
 
     def file_is_available(self, filepath):
         """ Returns True if the file specified by "filepath" is available

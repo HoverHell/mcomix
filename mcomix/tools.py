@@ -6,6 +6,7 @@ import re
 import gc
 import bisect
 import operator
+import math
 
 
 NUMERIC_REGEXP = re.compile(r"\d+|\D+")  # Split into numerics and characters
@@ -102,13 +103,9 @@ def get_data_directory():
 
 
 def number_of_digits(n):
-    num_of_digits = 1
-
-    while n > 9:
-        n /= 10
-        num_of_digits += 1
-
-    return num_of_digits
+    if 0 == n:
+        return 1
+    return int(math.log10(abs(n))) + 1
 
 
 def garbage_collect():
@@ -138,23 +135,14 @@ def scale(t, factor):
 
 def vector_sub(a, b):
     """ Subtracts vector b from vector a. """
-    result = [0] * len(a)
-    for i in range(len(a)):
-        result[i] = a[i] - b[i]
-    return result
+    return map(operator.sub, a, b)
 
 def vector_add(a, b):
     """ Adds vector a to vector b. """
-    result = [0] * len(a)
-    for i in range(len(a)):
-        result[i] = a[i] + b[i]
-    return result
+    return map(operator.add, a, b)
 
 def vector_opposite(a):
     """ Returns the opposite vector -a. """
-    result = [0] * len(a)
-    for i in range(len(a)):
-        result[i] = -a[i]
-    return result
+    return map(operator.neg, a)
 
 # vim: expandtab:sw=4:ts=4

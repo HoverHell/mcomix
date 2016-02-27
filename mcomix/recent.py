@@ -10,7 +10,8 @@ import sys
 from mcomix import preferences
 from mcomix import i18n
 from mcomix import portability
-from mcomix import constants
+from mcomix import archive_tools
+from mcomix import image_tools
 from mcomix import log
 
 class RecentFilesMenu(gtk.RecentChooserMenu):
@@ -18,7 +19,7 @@ class RecentFilesMenu(gtk.RecentChooserMenu):
     def __init__(self, ui, window):
         self._window = window
         self._manager = gtk.recent_manager_get_default()
-        gtk.RecentChooserMenu.__init__(self, self._manager)
+        super(RecentFilesMenu, self).__init__(self._manager)
 
         self.set_sort_type(gtk.RECENT_SORT_MRU)
         self.set_show_tips(True)
@@ -28,20 +29,18 @@ class RecentFilesMenu(gtk.RecentChooserMenu):
             self.set_show_numbers(True)
 
         rfilter = gtk.RecentFilter()
-        rfilter.add_pixbuf_formats()
-
-        mimetypes, patterns = itertools.izip(constants.ZIP_FORMATS,
-                constants.RAR_FORMATS, constants.TAR_FORMATS,
-                constants.SZIP_FORMATS)
-
-        for mimetype in itertools.chain.from_iterable(mimetypes):
-            rfilter.add_mime_type(mimetype)
-
-        # Win32 prefers file patterns instead of MIME types
-        for pattern in itertools.chain.from_iterable(patterns):
-            rfilter.add_pattern(pattern)
-
+        supported_formats = {}
+        supported_formats.update(image_tools.get_supported_formats())
+        supported_formats.update(archive_tools.get_supported_formats())
+        for name in sorted(supported_formats):
+            mime_types, extensions = supported_formats[name]
+            patterns = ['*.%s' % ext for ext in extensions]
+            for mime in mime_types:
+                rfilter.add_mime_type(mime)
+            for pat in patterns:
+                rfilter.add_pattern(pat)
         self.add_filter(rfilter)
+
         self.connect('item_activated', self._load)
 
     def _load(self, *args):

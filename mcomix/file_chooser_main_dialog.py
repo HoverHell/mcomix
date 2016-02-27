@@ -12,21 +12,12 @@ class _MainFileChooserDialog(file_chooser_base_dialog._BaseFileChooserDialog):
     """The normal filechooser dialog used with the "Open" menu item."""
 
     def __init__(self, window):
-        file_chooser_base_dialog._BaseFileChooserDialog.__init__(self)
+        super(_MainFileChooserDialog, self).__init__()
         self._window = window
         self.set_transient_for(window)
         self.filechooser.set_select_multiple(True)
-
-        ffilter = gtk.FileFilter()
-        ffilter.add_pixbuf_formats()
-        ffilter.set_name(_('All images'))
-        self.filechooser.add_filter(ffilter)
-        self.add_filter(_('JPEG images'), ('image/jpeg',), ('*.jpg', '*.jpeg'))
-        self.add_filter(_('PNG images'), ('image/png',), ('*.png',))
-        self.add_filter(_('GIF images'), ('image/gif',), ('*.gif',))
-        self.add_filter(_('TIFF images'), ('image/tiff',), ('*.tiff',))
-        self.add_filter(_('BMP images'), ('image/bmp',), ('*.bmp',))
-
+        self.add_archive_filters()
+        self.add_image_filters()
         filters = self.filechooser.list_filters()
         try:
             # When setting this to the first filter ("All files"), this

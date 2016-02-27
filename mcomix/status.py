@@ -11,7 +11,7 @@ class Statusbar(gtk.EventBox):
     SPACING = 5
 
     def __init__(self):
-        gtk.EventBox.__init__(self)
+        super(Statusbar, self).__init__()
 
         self._loading = True
 
@@ -60,6 +60,7 @@ class Statusbar(gtk.EventBox):
         self._root = ''
         self._filename = ''
         self._update_sensitivity()
+        self.show_all()
 
         self._loading = False
 
@@ -67,8 +68,8 @@ class Statusbar(gtk.EventBox):
         """Set a specific message (such as an error message) on the statusbar,
         replacing whatever was there earlier.
         """
-        self.status.pop(-1)
-        self.status.push(-1, " " * Statusbar.SPACING + message)
+        self.status.pop(0)
+        self.status.push(0, " " * Statusbar.SPACING + message)
 
     def set_page_number(self, page, total, this_screen):
         """Update the page number."""
@@ -123,16 +124,18 @@ class Statusbar(gtk.EventBox):
 
         space = " " * Statusbar.SPACING
         text = (space + "|" + space).join(self._get_status_text())
-        self.status.pop(-1)
-        self.status.push(-1, space + text)
+        self.status.pop(0)
+        self.status.push(0, space + text)
 
     def push(self, context_id, message):
         """ Compatibility with gtk.Statusbar. """
-        self.status.push(context_id, message)
+        assert context_id >= 0
+        self.status.push(context_id + 1, message)
 
     def pop(self, context_id):
         """ Compatibility with gtk.Statusbar. """
-        self.status.pop(context_id)
+        assert context_id >= 0
+        self.status.pop(context_id + 1)
 
     def _get_status_text(self):
         """ Returns an array of text fields that should be displayed. """
@@ -220,18 +223,18 @@ class TooltipStatusHelper(object):
         if isinstance(widget, gtk.MenuItem) and tooltip:
             cid = widget.connect('select', self._on_item_select, tooltip)
             cid2 = widget.connect('deselect', self._on_item_deselect)
-            widget.set_data('app::connect-ids', (cid, cid2))
+            setattr(widget, 'app::connect-ids', (cid, cid2))
 
     def _on_disconnect_proxy(self, uimgr, action, widget):
         """ Disconnects the widget's selection handlers. """
-        cids = widget.get_data('app::connect-ids') or ()
+        cids = getattr(widget, 'app::connect-ids', ())
         for cid in cids:
             widget.disconnect(cid)
 
     def _on_item_select(self, menuitem, tooltip):
-        self._statusbar.push(-1, " " * Statusbar.SPACING + tooltip)
+        self._statusbar.push(0, " " * Statusbar.SPACING + tooltip)
 
     def _on_item_deselect(self, menuitem):
-        self._statusbar.pop(-1)
+        self._statusbar.pop(0)
 
 # vim: expandtab:sw=4:ts=4

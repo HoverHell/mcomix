@@ -14,7 +14,7 @@ class _EnhanceImageDialog(gtk.Dialog):
     """
 
     def __init__(self, window):
-        gtk.Dialog.__init__(self, _('Enhance image'), window, 0)
+        super(_EnhanceImageDialog, self).__init__(_('Enhance image'), window, 0)
 
         self._window = window
 
@@ -26,7 +26,6 @@ class _EnhanceImageDialog(gtk.Dialog):
         self.add_action_widget(save, gtk.RESPONSE_APPLY)
         self.add_button(gtk.STOCK_OK, gtk.RESPONSE_OK)
 
-        self.set_has_separator(False)
         self.set_resizable(False)
         self.connect('response', self._response)
         self.set_default_response(gtk.RESPONSE_OK)
@@ -51,57 +50,25 @@ class _EnhanceImageDialog(gtk.Dialog):
         hbox.pack_start(vbox_left, False, False, 2)
         hbox.pack_start(vbox_right, True, True, 2)
 
-        label = gtk.Label(_('_Brightness:'))
-        label.set_alignment(1, 0.5)
-        label.set_use_underline(True)
-        vbox_left.pack_start(label, True, False, 2)
-        adj = gtk.Adjustment(0.0, -1.0, 1.0, 0.01, 0.1)
-        self._brightness_scale = gtk.HScale(adj)
-        self._brightness_scale.set_digits(2)
-        self._brightness_scale.set_value_pos(gtk.POS_RIGHT)
-        self._brightness_scale.connect('value-changed', self._change_values)
-        self._brightness_scale.set_update_policy(gtk.UPDATE_DELAYED)
-        label.set_mnemonic_widget(self._brightness_scale)
-        vbox_right.pack_start(self._brightness_scale, True, False, 2)
+        def _create_scale(label_text):
+            label = gtk.Label(label_text)
+            label.set_alignment(1, 0.5)
+            label.set_use_underline(True)
+            vbox_left.pack_start(label, True, False, 2)
+            adj = gtk.Adjustment(0.0, -1.0, 1.0, 0.01, 0.1)
+            scale = gtk.HScale(adj)
+            scale.set_digits(2)
+            scale.set_value_pos(gtk.POS_RIGHT)
+            scale.connect('value-changed', self._change_values)
+            scale.set_update_policy(gtk.UPDATE_DELAYED)
+            label.set_mnemonic_widget(scale)
+            vbox_right.pack_start(scale, True, False, 2)
+            return scale
 
-        label = gtk.Label(_('_Contrast:'))
-        label.set_alignment(1, 0.5)
-        label.set_use_underline(True)
-        vbox_left.pack_start(label, True, False, 2)
-        adj = gtk.Adjustment(0.0, -1.0, 1.0, 0.01, 0.1)
-        self._contrast_scale = gtk.HScale(adj)
-        self._contrast_scale.set_digits(2)
-        self._contrast_scale.set_value_pos(gtk.POS_RIGHT)
-        self._contrast_scale.connect('value-changed', self._change_values)
-        self._contrast_scale.set_update_policy(gtk.UPDATE_DELAYED)
-        label.set_mnemonic_widget(self._contrast_scale)
-        vbox_right.pack_start(self._contrast_scale, True, False, 2)
-
-        label = gtk.Label(_('S_aturation:'))
-        label.set_alignment(1, 0.5)
-        label.set_use_underline(True)
-        vbox_left.pack_start(label, True, False, 2)
-        adj = gtk.Adjustment(0.0, -1.0, 1.0, 0.01, 0.1)
-        self._saturation_scale = gtk.HScale(adj)
-        self._saturation_scale.set_digits(2)
-        self._saturation_scale.set_value_pos(gtk.POS_RIGHT)
-        self._saturation_scale.connect('value-changed', self._change_values)
-        self._saturation_scale.set_update_policy(gtk.UPDATE_DELAYED)
-        label.set_mnemonic_widget(self._saturation_scale)
-        vbox_right.pack_start(self._saturation_scale, True, False, 2)
-
-        label = gtk.Label(_('S_harpness:'))
-        label.set_alignment(1, 0.5)
-        label.set_use_underline(True)
-        vbox_left.pack_start(label, True, False, 2)
-        adj = gtk.Adjustment(0.0, -1.0, 1.0, 0.01, 0.1)
-        self._sharpness_scale = gtk.HScale(adj)
-        self._sharpness_scale.set_digits(2)
-        self._sharpness_scale.set_value_pos(gtk.POS_RIGHT)
-        self._sharpness_scale.connect('value-changed', self._change_values)
-        self._sharpness_scale.set_update_policy(gtk.UPDATE_DELAYED)
-        label.set_mnemonic_widget(self._sharpness_scale)
-        vbox_right.pack_start(self._sharpness_scale, True, False, 2)
+        self._brightness_scale = _create_scale(_('_Brightness:'))
+        self._contrast_scale = _create_scale(_('_Contrast:'))
+        self._saturation_scale = _create_scale(_('S_aturation:'))
+        self._sharpness_scale = _create_scale(_('S_harpness:'))
 
         vbox.pack_start(gtk.HSeparator())
 
@@ -122,17 +89,33 @@ class _EnhanceImageDialog(gtk.Dialog):
         self._contrast_scale.set_sensitive(
             not self._autocontrast_button.get_active())
 
-        self.draw_histogram(self._window.images[0]) # XXX transitional(double page limitation)
+        self._window.imagehandler.page_available += self._on_page_available
+        self._window.filehandler.file_closed += self._on_book_close
+        self._window.page_changed += self._on_page_change
+        self._on_page_change()
 
         self.show_all()
 
-    def draw_histogram(self, image):
-        """Draw a histogram representing <image> in the dialog."""
-        pixbuf = image.get_pixbuf()
+    def _on_book_close(self):
+        self.clear_histogram()
 
-        if pixbuf is not None:
-            self._hist_image.set_from_pixbuf(histogram.draw_histogram(pixbuf,
-                text=False))
+    def _on_page_change(self):
+        if not self._window.imagehandler.page_is_available():
+            self.clear_histogram()
+            return
+        # XXX transitional(double page limitation)
+        pixbuf = self._window.imagehandler.get_pixbufs(1)[0]
+        self.draw_histogram(pixbuf)
+
+    def _on_page_available(self, page_number):
+        current_page_number = self._window.imagehandler.get_current_page()
+        if current_page_number == page_number:
+            self._on_page_change()
+
+    def draw_histogram(self, pixbuf):
+        """Draw a histogram representing <pixbuf> in the dialog."""
+        histogram_pixbuf = histogram.draw_histogram(pixbuf, text=False)
+        self._hist_image.set_from_pixbuf(histogram_pixbuf)
 
     def clear_histogram(self):
         """Clear the histogram in the dialog."""
@@ -175,25 +158,12 @@ class _EnhanceImageDialog(gtk.Dialog):
             self._change_values(self)
 
 
-def draw_histogram(image):
-    """Draw a histogram of <image> in the dialog, if there is one."""
-    if _dialog is not None:
-        _dialog.draw_histogram(image)
-
-
-def clear_histogram():
-    """Clear the histogram in the dialog, if there is one."""
-    if _dialog is not None:
-        _dialog.clear_histogram()
-
 def open_dialog(action, window):
     """Create and display the (singleton) image enhancement dialog."""
     global _dialog
 
     if _dialog is None:
         _dialog = _EnhanceImageDialog(window)
-        draw_histogram(window.images[0]) # XXX transitional(double page limitation)
-
     else:
         _dialog.present()
 

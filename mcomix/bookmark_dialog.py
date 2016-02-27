@@ -13,13 +13,12 @@ class _BookmarksDialog(gtk.Dialog):
     _SORT_TYPE, _SORT_NAME, _SORT_PAGE, _SORT_ADDED = 100, 101, 102, 103
 
     def __init__(self, window, bookmarks_store):
-        gtk.Dialog.__init__(self, _('Edit Bookmarks'), window, gtk.DIALOG_DESTROY_WITH_PARENT,
+        super(_BookmarksDialog, self).__init__(_('Edit Bookmarks'), window, gtk.DIALOG_DESTROY_WITH_PARENT,
             (gtk.STOCK_REMOVE, constants.RESPONSE_REMOVE,
              gtk.STOCK_CLOSE, gtk.RESPONSE_CLOSE))
 
         self._bookmarks_store = bookmarks_store
 
-        self.set_has_separator(False)
         self.set_resizable(True)
         self.set_default_response(gtk.RESPONSE_CLOSE)
         # scroll area fill to the edge (TODO window should not really be a dialog)

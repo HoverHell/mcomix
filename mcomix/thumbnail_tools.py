@@ -9,6 +9,7 @@ import tempfile
 import mimetypes
 import threading
 import itertools
+import traceback
 import PIL.Image as Image
 from urllib import pathname2url
 
@@ -35,34 +36,39 @@ class Thumbnailer(object):
     it either stores thumbnails on disk and retrieves them later,
     or simply creates new thumbnails each time it is called. """
 
-    def __init__(self, dst_dir=constants.THUMBNAIL_PATH):
+    def __init__(self, dst_dir=constants.THUMBNAIL_PATH, store_on_disk=None,
+                 size=None, force_recreation=False, archive_support=False):
+        """
+        <dst_dir> set the thumbnailer's storage directory.
 
-        self.store_on_disk = prefs['create thumbnails']
+        If <store_on_disk> on disk is True, it changes the thumbnailer's
+        behaviour to store files on disk, or just create new thumbnails each
+        time it was called when set to False. Defaults to the 'create
+        thumbnails' preference if not set.
+
+        The dimensions for the created thumbnails is set by <size>, a (width,
+        height) tupple. Defaults to the 'thumbnail size' preference if not set.
+
+        If <force_recreation> is True, thumbnails stored on disk
+        will always be re-created instead of being re-used.
+
+        If <archive_support> is True, support for archive thumbnail creation
+        (based on cover detection) is enabled. Otherwise, only image files are
+        supported.
+        """
         self.dst_dir = dst_dir
-        self.width = prefs['thumbnail size']
-        self.height = prefs['thumbnail size']
-        self.default_sizes = True
-        self.force_recreation = False
-
-    def set_size(self, width, height):
-        """ Sets <weight> and <height> for created thumbnails. """
-        self.width = width
-        self.height = height
-        self.default_sizes = False
-
-    def set_force_recreation(self, force_recreation):
-        """ If <force_recreation> is True, thumbnails stored on disk
-        will always be re-created instead of being re-used. """
+        if store_on_disk is None:
+            self.store_on_disk = prefs['create thumbnails']
+        else:
+            self.store_on_disk = store_on_disk
+        if size is None:
+            self.width = self.height = prefs['thumbnail size']
+            self.default_sizes = True
+        else:
+            self.width, self.height = size
+            self.default_sizes = False
         self.force_recreation = force_recreation
-
-    def set_store_on_disk(self, store_on_disk):
-        """ Changes the thumbnailer's behaviour to store files on
-        disk, or just create new thumbnails each time it was called. """
-        self.store_on_disk = store_on_disk
-
-    def set_destination_dir(self, dst_dir):
-        """ Changes the Thumbnailer's storage directory. """
-        self.dst_dir = dst_dir
+        self.archive_support = archive_support
 
     def thumbnail(self, filepath, async=False):
         """ Returns a thumbnail pixbuf for <filepath>, transparently handling
@@ -77,8 +83,8 @@ class Thumbnailer(object):
             self.width = prefs['thumbnail size']
             self.height = prefs['thumbnail size']
 
-        thumbpath = self._path_to_thumbpath(filepath)
         if self._thumbnail_exists(filepath):
+            thumbpath = self._path_to_thumbpath(filepath)
             pixbuf = image_tools.load_pixbuf(thumbpath)
             self.thumbnail_finished(filepath, pixbuf)
             return pixbuf
@@ -115,7 +121,10 @@ class Thumbnailer(object):
         """ Creates a thumbnail pixbuf from <filepath>, and returns it as a
         tuple along with a file metadata dictionary: (pixbuf, tEXt_data) """
 
-        mime = archive_tools.archive_mime_type(filepath)
+        if self.archive_support:
+            mime = archive_tools.archive_mime_type(filepath)
+        else:
+            mime = None
         if mime is not None:
             cleanup = []
             try:
@@ -139,9 +148,12 @@ class Thumbnailer(object):
                     return None, None
 
                 pixbuf = image_tools.load_pixbuf_size(image_path, self.width, self.height)
-                tEXt_data = self._get_text_data(image_path)
-                # Use the archive's mTime instead of the extracted file's mtime
-                tEXt_data['tEXt::Thumb::MTime'] = str(long(os.stat(filepath).st_mtime))
+                if self.store_on_disk:
+                    tEXt_data = self._get_text_data(image_path)
+                    # Use the archive's mTime instead of the extracted file's mtime
+                    tEXt_data['tEXt::Thumb::MTime'] = str(long(os.stat(filepath).st_mtime))
+                else:
+                    tEXt_data = None
 
                 return pixbuf, tEXt_data
             finally:
@@ -150,7 +162,10 @@ class Thumbnailer(object):
 
         elif image_tools.is_image_file(filepath):
             pixbuf = image_tools.load_pixbuf_size(filepath, self.width, self.height)
-            tEXt_data = self._get_text_data(filepath)
+            if self.store_on_disk:
+                tEXt_data = self._get_text_data(filepath)
+            else:
+                tEXt_data = None
 
             return pixbuf, tEXt_data
         else:
@@ -177,20 +192,14 @@ class Thumbnailer(object):
         # MTime could be floating point number, so convert to long first to have a fixed point number
         mtime = str(long(stat.st_mtime))
         size = str(stat.st_size)
-        try:
-            img = Image.open(filepath)
-            width = str(img.size[0])
-            height = str(img.size[1])
-        except IOError:
-            width = height = 0
-
+        format, width, height = image_tools.get_image_info(filepath)
         return {
             'tEXt::Thumb::URI':           uri,
             'tEXt::Thumb::MTime':         mtime,
             'tEXt::Thumb::Size':          size,
             'tEXt::Thumb::Mimetype':      mime,
-            'tEXt::Thumb::Image::Width':  width,
-            'tEXt::Thumb::Image::Height': height,
+            'tEXt::Thumb::Image::Width':  str(width),
+            'tEXt::Thumb::Image::Height': str(height),
             'tEXt::Software':             'MComix %s' % constants.VERSION
         }
 
@@ -264,7 +273,7 @@ class Thumbnailer(object):
         files = itertools.ifilter(lambda filename:
                 u'credit' not in os.path.split(filename)[1].lower(), files)
 
-        images = list(itertools.ifilter(constants.SUPPORTED_IMAGE_REGEX.search, files))
+        images = list(itertools.ifilter(image_tools.SUPPORTED_IMAGE_REGEX.search, files))
 
         tools.alphanumeric_sort(images)
 

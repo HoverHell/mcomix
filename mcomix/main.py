@@ -9,8 +9,8 @@ import gobject
 from mcomix import constants
 from mcomix import cursor_handler
 from mcomix import i18n
+from mcomix import icons
 from mcomix import enhance_backend
-from mcomix import enhance_dialog
 from mcomix import event
 from mcomix import file_handler
 from mcomix import image_handler
@@ -47,21 +47,20 @@ class MainWindow(gtk.Window):
     def __init__(self, fullscreen=False, is_slideshow=slideshow,
             show_library=False, manga_mode=False, double_page=False,
             zoom_mode=None, open_path=None, open_page=1):
-        gtk.Window.__init__(self, gtk.WINDOW_TOPLEVEL)
+        super(MainWindow, self).__init__(gtk.WINDOW_TOPLEVEL)
 
         # ----------------------------------------------------------------
         # Attributes
         # ----------------------------------------------------------------
-        self.is_in_focus = True
-        self.is_fullscreen = False
-        self.is_double_page = False
+        # Used to detect window fullscreen state transitions.
+        self.was_fullscreen = False
         self.is_manga_mode = False
-        self.is_virtual_double_page = False  # I.e. a wide image is displayed
-        self.width = None
-        self.height = None
+        self.previous_size = (None, None)
         self.was_out_of_focus = False
         #: Used to remember if changing to fullscreen enabled 'Hide all'
         self.hide_all_forced = False
+        # Remember last scroll destination.
+        self._last_scroll_destination = constants.SCROLL_TO_START
 
         self.layout = _dummy_layout()
         self._spacing = 2
@@ -76,6 +75,8 @@ class MainWindow(gtk.Window):
             gtk.VScrollbar(self._vadjust))
 
         self.filehandler = file_handler.FileHandler(self)
+        self.filehandler.file_closed += self._on_file_closed
+        self.filehandler.file_opened += self._on_file_opened
         self.imagehandler = image_handler.ImageHandler(self)
         self.imagehandler.page_available += self._page_available
         self.thumbnailsidebar = thumbbar.ThumbnailSidebar(self)
@@ -101,7 +102,7 @@ class MainWindow(gtk.Window):
         # ----------------------------------------------------------------
         self.set_title(constants.APPNAME)
         self.set_size_request(300, 300)  # Avoid making the window *too* small
-        self.resize(prefs['window width'], prefs['window height'])
+        self.restore_window_geometry()
 
         # Hook up keyboard shortcuts
         self._event_handler.register_key_events()
@@ -174,30 +175,6 @@ class MainWindow(gtk.Window):
         if prefs['invert smart scroll']:
             self.actiongroup.get_action('invert_scroll').activate()
 
-        if prefs['show toolbar']:
-            prefs['show toolbar'] = False
-            self.actiongroup.get_action('toolbar').activate()
-
-        if prefs['show menubar']:
-            prefs['show menubar'] = False
-            self.actiongroup.get_action('menubar').activate()
-
-        if prefs['show statusbar']:
-            prefs['show statusbar'] = False
-            self.actiongroup.get_action('statusbar').activate()
-
-        if prefs['show scrollbar']:
-            prefs['show scrollbar'] = False
-            self.actiongroup.get_action('scrollbar').activate()
-
-        if prefs['show thumbnails']:
-            prefs['show thumbnails'] = False
-            self.actiongroup.get_action('thumbnails').activate()
-
-        if prefs['hide all']:
-            prefs['hide all'] = False
-            self.actiongroup.get_action('hide_all').activate()
-
         if prefs['keep transformation']:
             prefs['keep transformation'] = False
             self.actiongroup.get_action('keep_transformation').activate()
@@ -206,13 +183,44 @@ class MainWindow(gtk.Window):
             prefs['vertical flip'] = False
             prefs['horizontal flip'] = False
 
+        # List of "toggles" than can be shown/hidden by the user.
+        self._toggle_list = (
+            # Preference        Action        Widget(s)
+            ('show menubar'   , 'menubar'   , (self.menubar,)         ),
+            ('show scrollbar' , 'scrollbar' , self._scroll            ),
+            ('show statusbar' , 'statusbar' , (self.statusbar,)       ),
+            ('show thumbnails', 'thumbnails', (self.thumbnailsidebar,)),
+            ('show toolbar'   , 'toolbar'   , (self.toolbar,)         ),
+        )
+
+        # Each "toggle" widget "eats" part of the main layout visible area.
+        self._toggle_axis = {
+            self.thumbnailsidebar              : constants.WIDTH_AXIS ,
+            self._scroll[constants.HEIGHT_AXIS]: constants.WIDTH_AXIS ,
+            self._scroll[constants.WIDTH_AXIS] : constants.HEIGHT_AXIS,
+            self.statusbar                     : constants.HEIGHT_AXIS,
+            self.toolbar                       : constants.HEIGHT_AXIS,
+            self.menubar                       : constants.HEIGHT_AXIS,
+        }
+
+        # Start with all "toggle" widgets hidden to avoid ugly transitions.
+        for preference, action, widget_list in self._toggle_list:
+            for widget in widget_list:
+                widget.hide()
+
+        toggleaction = self.actiongroup.get_action('hide_all')
+        toggleaction.set_active(prefs['hide all'])
+
+        # Sync each "toggle" widget active state with its preference.
+        for preference, action, widget_list in self._toggle_list:
+            self.actiongroup.get_action(action).set_active(prefs[preference])
+
         self.actiongroup.get_action('menu_autorotate_width').set_sensitive(False)
         self.actiongroup.get_action('menu_autorotate_height').set_sensitive(False)
 
         self.add(table)
         table.show()
         self._main_layout.show()
-        self._display_active_widgets()
 
         self._main_layout.set_events(gtk.gdk.BUTTON1_MOTION_MASK |
                                      gtk.gdk.BUTTON2_MOTION_MASK |
@@ -225,12 +233,13 @@ class MainWindow(gtk.Window):
                                         gtk.gdk.ACTION_COPY |
                                         gtk.gdk.ACTION_MOVE)
 
-        self.connect( 'focus-in-event', self.gained_focus )
-        self.connect( 'focus-out-event', self.lost_focus )
+        self.connect('focus-in-event', self.gained_focus)
+        self.connect('focus-out-event', self.lost_focus)
         self.connect('delete_event', self.close_program)
         self.connect('key_press_event', self._event_handler.key_press_event)
         self.connect('key_release_event', self._event_handler.key_release_event)
         self.connect('configure_event', self._event_handler.resize_event)
+        self.connect('window-state-event', self._event_handler.window_state_event)
 
         self._main_layout.connect('button_release_event',
             self._event_handler.mouse_release_event)
@@ -246,11 +255,9 @@ class MainWindow(gtk.Window):
         self.uimanager.set_sensitivities()
         self.show()
 
-        # If MComix is set to start in fullscreen mode, it
-        # cannot switch to windowed mode on Win32 unless this
-        # condition is set to trigger after normal show().
         if prefs['default fullscreen'] or fullscreen:
-            self.actiongroup.get_action('fullscreen').activate()
+            toggleaction = self.actiongroup.get_action('fullscreen')
+            toggleaction.set_active(True)
 
         if prefs['previous quit was quit and save']:
             fileinfo = self.filehandler.read_fileinfo_file()
@@ -272,45 +279,131 @@ class MainWindow(gtk.Window):
             self.actiongroup.get_action('library').activate()
 
         self.cursor_handler.auto_hide_on()
+        # Make sure we receive *all* mouse motion events,
+        # even if a modal dialog is being shown.
+        def _on_event(event):
+            if gtk.gdk.MOTION_NOTIFY == event.type:
+                self.cursor_handler.refresh()
+            gtk.main_do_event(event)
+        gtk.gdk.event_handler_set(_on_event)
 
     def gained_focus(self, *args):
-        self.is_in_focus = True
+        self.was_out_of_focus = False
 
     def lost_focus(self, *args):
-        self.is_in_focus = False
+        self.was_out_of_focus = True
 
         # If the user presses CTRL for a keyboard shortcut, e.g. to
         # open the library, key_release_event isn't fired and force_single_step
         # isn't properly unset.
         self.imagehandler.force_single_step = False
 
-    @callback.Callback
-    def draw_image(self, at_bottom=False, scroll=False):
+    def draw_image(self, scroll_to=None):
         """Draw the current pages and update the titlebar and statusbar.
         """
+        # FIXME: what if scroll_to is different?
         if not self._waiting_for_redraw:  # Don't stack up redraws.
             self._waiting_for_redraw = True
-            gobject.idle_add(self._draw_image, at_bottom, scroll,
-                priority=gobject.PRIORITY_HIGH_IDLE)
+            gobject.idle_add(self._draw_image, scroll_to,
+                             priority=gobject.PRIORITY_HIGH_IDLE)
 
-    def _draw_image(self, at_bottom, scroll):
-        self._display_active_widgets()
+    def _update_toggle_preference(self, preference, toggleaction):
+        ''' Update "toggle" widget corresponding <preference>.
+
+        Note: the widget visibily itself is left unchanged. '''
+        prefs[preference] = toggleaction.get_active()
+        if 'hide all' == preference:
+            self._update_toggles_sensitivity()
+        # Since the size of the drawing area is dependent
+        # on the visible "toggles", redraw the page.
+        self.draw_image()
+
+    def _should_toggle_be_visible(self, preference):
+        ''' Return <True> if "toggle" widget for <preference> should be visible. '''
+        if self.is_fullscreen:
+            visible = not prefs['hide all in fullscreen']
+        else:
+            visible = not prefs['hide all']
+        visible &= prefs[preference]
+        if 'show thumbnails' == preference:
+            visible &= self.filehandler.file_loaded
+            visible &= self.imagehandler.get_number_of_pages() > 0
+        return visible
+
+    def _update_toggles_sensitivity(self):
+        ''' Update each "toggle" widget sensitivity. '''
+        sensitive = True
+        if prefs['hide all']:
+            sensitive = False
+        elif prefs['hide all in fullscreen'] and self.is_fullscreen:
+            sensitive = False
+        for preference, action, widget_list in self._toggle_list:
+            self.actiongroup.get_action(action).set_sensitive(sensitive)
+
+    def _update_toggles_visibility(self):
+        ''' Update each "toggle" widget visibility. '''
+        for preference, action, widget_list in self._toggle_list:
+            should_be_visible = self._should_toggle_be_visible(preference)
+            for widget in widget_list:
+                # No change in visibility?
+                if should_be_visible != widget.get_visible():
+                    (widget.show if should_be_visible else widget.hide)()
+
+    def _draw_image(self, scroll_to):
+
+        self._update_toggles_visibility()
 
         if not self.filehandler.file_loaded:
+            self._clear_main_area()
             self._waiting_for_redraw = False
             return False
-
-        self.is_virtual_double_page = self.imagehandler.get_virtual_double_page()
 
         if self.imagehandler.page_is_available():
             distribution_axis = constants.DISTRIBUTION_AXIS
             alignment_axis = constants.ALIGNMENT_AXIS
-            n = 2 if self.displayed_double() else 1 # XXX limited to at most 2 pages
-            pixbufs = list(self.imagehandler.get_pixbufs(n))
-            rotations = [self._get_pixbuf_rotation(x, True) for x in pixbufs]
-            sizes = map(lambda y: tuple(reversed(y[1])) \
-                if rotations[y[0]] in (90, 270) else y[1], # 2D only
-                enumerate([(x.get_width(), x.get_height()) for x in pixbufs]))
+            pixbuf_count = 2 if self.displayed_double() else 1 # XXX limited to at most 2 pages
+            pixbuf_list = list(self.imagehandler.get_pixbufs(pixbuf_count))
+            size_list = [[pixbuf.get_width(), pixbuf.get_height()]
+                         for pixbuf in pixbuf_list]
+
+            if self.is_manga_mode:
+                orientation = constants.MANGA_ORIENTATION
+            else:
+                orientation = constants.WESTERN_ORIENTATION
+
+            # Rotation handling:
+            # - apply Exif rotation on individual images
+            # - apply automatic rotation (size based) on whole page
+            # - apply manual rotation on whole page
+            if prefs['auto rotate from exif']:
+                rotation_list = [image_tools.get_implied_rotation(pixbuf)
+                                 for pixbuf in pixbuf_list]
+            else:
+                rotation_list = [0] * len(pixbuf_list)
+            virtual_size = [0, 0]
+            for i in range(pixbuf_count):
+                if rotation_list[i] in (90, 270):
+                    size_list[i].reverse()
+                size = size_list[i]
+                virtual_size[distribution_axis] += size[distribution_axis]
+                virtual_size[alignment_axis] = max(virtual_size[alignment_axis],
+                                                   size[alignment_axis])
+            rotation = self._get_size_rotation(*virtual_size)
+            rotation = (rotation + prefs['rotation']) % 360
+            if rotation in (90, 270):
+                distribution_axis, alignment_axis = alignment_axis, distribution_axis
+                orientation = list(orientation)
+                orientation.reverse()
+                for i in range(pixbuf_count):
+                    size_list[i].reverse()
+            if rotation in (180, 270):
+                orientation = tools.vector_opposite(orientation)
+            for i in range(pixbuf_count):
+                rotation_list[i] = (rotation_list[i] + rotation) % 360
+            if prefs['vertical flip'] and rotation in (90, 270):
+                orientation = tools.vector_opposite(orientation)
+            if prefs['horizontal flip'] and rotation in (0, 180):
+                orientation = tools.vector_opposite(orientation)
 
             viewport_size = () # dummy
             expand_area = False
@@ -324,16 +417,19 @@ class MainWindow(gtk.Window):
                 viewport_size = new_viewport_size
                 zoom_dummy_size = list(viewport_size)
                 dasize = zoom_dummy_size[distribution_axis] - \
-                    self._spacing * (n - 1)
+                    self._spacing * (pixbuf_count - 1)
                 if dasize <= 0:
                     dasize = 1
                 zoom_dummy_size[distribution_axis] = dasize
-                scaled_sizes = self.zoom.get_zoomed_size(sizes, zoom_dummy_size,
+                scaled_sizes = self.zoom.get_zoomed_size(size_list, zoom_dummy_size,
                     distribution_axis)
-                self.layout = layout.FiniteLayout(scaled_sizes, viewport_size,
-                    constants.MANGA_ORIENTATION if self.is_manga_mode
-                    else constants.WESTERN_ORIENTATION, self._spacing,
-                    expand_area, distribution_axis, alignment_axis)
+                self.layout = layout.FiniteLayout(scaled_sizes,
+                                                  viewport_size,
+                                                  orientation,
+                                                  self._spacing,
+                                                  expand_area,
+                                                  distribution_axis,
+                                                  alignment_axis)
                 union_scaled_size = self.layout.get_union_box().get_size()
                 scrollbar_requests = map(operator.or_, scrollbar_requests,
                     tools.smaller(viewport_size, union_scaled_size))
@@ -341,66 +437,78 @@ class MainWindow(gtk.Window):
                     expand_area = True
                     viewport_size = () # start anew
 
-            for i in range(n):
-                pixbufs[i] = image_tools.fit_pixbuf_to_rectangle(
-                    pixbufs[i], scaled_sizes[i], rotations[i])
+            for i in range(pixbuf_count):
+                pixbuf_list[i] = image_tools.fit_pixbuf_to_rectangle(
+                    pixbuf_list[i], scaled_sizes[i], rotation_list[i])
 
-            for i in range(n):
-                if prefs['horizontal flip']: # 2D only
-                    pixbufs[i] = pixbufs[i].flip(horizontal=True)
-                if prefs['vertical flip']: # 2D only
-                    pixbufs[i] = pixbufs[i].flip(horizontal=False)
-                pixbufs[i] = self.enhancer.enhance(pixbufs[i])
+            for i in range(pixbuf_count):
+                if prefs['horizontal flip']:
+                    pixbuf_list[i] = pixbuf_list[i].flip(horizontal=True)
+                if prefs['vertical flip']:
+                    pixbuf_list[i] = pixbuf_list[i].flip(horizontal=False)
+                pixbuf_list[i] = self.enhancer.enhance(pixbuf_list[i])
 
-            for i in range(n):
-                image_tools.set_from_pixbuf(self.images[i], pixbufs[i])
+            for i in range(pixbuf_count):
+                image_tools.set_from_pixbuf(self.images[i], pixbuf_list[i])
 
             scales = tuple(map(lambda x, y: math.sqrt(tools.div(
-                tools.volume(x), tools.volume(y))), scaled_sizes, sizes))
+                tools.volume(x), tools.volume(y))), scaled_sizes, size_list))
 
-            resolutions = tuple(map(lambda x, y: x + (y,), sizes, scales))
+            resolutions = tuple(map(lambda x, y: x + [y,], size_list, scales))
             if self.is_manga_mode:
                 resolutions = tuple(reversed(resolutions))
             self.statusbar.set_resolution(resolutions)
+            self.statusbar.update()
 
             smartbg = prefs['smart bg']
             smartthumbbg = prefs['smart thumb bg'] and prefs['show thumbnails']
             if smartbg or smartthumbbg:
-                bg_colour = self.imagehandler.get_pixbuf_auto_background(n)
+                bg_colour = self.imagehandler.get_pixbuf_auto_background(pixbuf_count)
             if smartbg:
                 self.set_bg_colour(bg_colour)
             if smartthumbbg:
                 self.thumbnailsidebar.change_thumbnail_background_color(bg_colour)
 
-            #self._image_box.window.freeze_updates() # XXX replacement necessary?
+            self._main_layout.window.freeze_updates()
+
             self._main_layout.set_size(*union_scaled_size)
             content_boxes = self.layout.get_content_boxes()
-            for i in range(n):
+            for i in range(pixbuf_count):
                 self._main_layout.move(self.images[i],
                     *content_boxes[i].get_position())
 
-            for i in range(n):
+            for i in range(pixbuf_count):
                 self.images[i].show()
-            for i in range(n, len(self.images)):
+            for i in range(pixbuf_count, len(self.images)):
                 self.images[i].hide()
 
-            if scroll:
-                if at_bottom:
-                    self.scroll_to_predefined((constants.SCROLL_TO_END,) * 2,
-                        constants.LAST_INDEX)
-                else:
-                    self.scroll_to_predefined((constants.SCROLL_TO_START,) * 2,
-                        constants.FIRST_INDEX)
+            # Reset orientation so scrolling behaviour is sane.
+            if self.is_manga_mode:
+                self.layout.set_orientation(constants.MANGA_ORIENTATION)
+            else:
+                self.layout.set_orientation(constants.WESTERN_ORIENTATION)
 
-            #self._image_box.window.thaw_updates() # XXX replacement necessary?
+            if scroll_to is not None:
+                destination = (scroll_to,) * 2
+                if constants.SCROLL_TO_START == scroll_to:
+                    index = constants.FIRST_INDEX
+                elif constants.SCROLL_TO_END == scroll_to:
+                    index = constants.LAST_INDEX
+                else:
+                    index = None
+                self.scroll_to_predefined(destination, index)
+
+            self._main_layout.window.thaw_updates()
         else:
+            # Save scroll destination for when the page becomes available.
+            self._last_scroll_destination = scroll_to
             # If the pixbuf for the current page(s) isn't available,
             # hide all images to clear any old pixbufs.
             # XXX How about calling self._clear_main_area?
             for i in range(len(self.images)):
                 self.images[i].hide()
+            self._show_scrollbars([False] * len(self._scroll))
 
-        self._update_page_information()
         self._waiting_for_redraw = False
 
         return False
@@ -409,67 +517,59 @@ class MainWindow(gtk.Window):
         """ Updates the window with information that can be gathered
         even when the page pixbuf(s) aren't ready yet. """
 
+        page_number = self.imagehandler.get_current_page()
+        if not page_number:
+            return
         if self.displayed_double():
-            self.statusbar.set_page_number(
-                self.imagehandler.get_current_page(),
-                self.imagehandler.get_number_of_pages(), 2) # XXX implied by self.displayed_double() == True
-
-            left_filename, right_filename = \
-                self.imagehandler.get_page_filename(double=True)
-
+            number_of_pages = 2
+            left_filename, right_filename = self.imagehandler.get_page_filename(double=True)
             if self.is_manga_mode:
                 left_filename, right_filename = right_filename, left_filename
-
-            self.statusbar.set_filename(left_filename + ', ' + right_filename)
+            filename = left_filename + ', ' + right_filename
         else:
-            self.statusbar.set_page_number(
-                self.imagehandler.get_current_page(),
-                self.imagehandler.get_number_of_pages(), 1) # XXX implied by self.displayed_double() == False
-
-            self.statusbar.set_filename(self.imagehandler.get_page_filename())
-
+            number_of_pages = 1
+            filename = self.imagehandler.get_page_filename()
+        self.statusbar.set_page_number(page_number,
+                                       self.imagehandler.get_number_of_pages(),
+                                       number_of_pages)
+        self.statusbar.set_filename(filename)
         self.statusbar.set_root(self.filehandler.get_base_filename())
         self.statusbar.update()
         self.update_title()
 
-    def _get_pixbuf_rotation(self, pixbuf, no_autorotation=False):
-        """ Determines if a pixbuf must be rotated before being displayed.
+    def _get_size_rotation(self, width, height):
+        """ Determines the rotation to be applied.
         Returns the degree of rotation (0, 90, 180, 270). """
-        
-        width, height = pixbuf.get_width(), pixbuf.get_height()
-        rotation = prefs['rotation']
-        if prefs['auto rotate from exif']:
-            rotation += image_tools.get_implied_rotation(pixbuf)
-            rotation = rotation % 360
+
+        size_rotation = 0
 
         if (height > width and
-            not no_autorotation and
             prefs['auto rotate depending on size'] in
                 (constants.AUTOROTATE_HEIGHT_90, constants.AUTOROTATE_HEIGHT_270)):
 
             if prefs['auto rotate depending on size'] == constants.AUTOROTATE_HEIGHT_90:
-                rotation = 90
+                size_rotation = 90
             else:
-                rotation = 270
+                size_rotation = 270
         elif (width > height and
-              not no_autorotation and
               prefs['auto rotate depending on size'] in
                 (constants.AUTOROTATE_WIDTH_90, constants.AUTOROTATE_WIDTH_270)):
 
             if prefs['auto rotate depending on size'] == constants.AUTOROTATE_WIDTH_90:
-                rotation = 90
+                size_rotation = 90
             else:
-                rotation = 270
+                size_rotation = 270
 
-        return rotation
+        return size_rotation
 
     def _page_available(self, page):
         """ Called whenever a new page is ready for displaying. """
         # Refresh display when currently opened page becomes available.
-        if page == self.imagehandler.get_current_page() \
-            or (self.displayed_double() and page == self.imagehandler.get_current_page() + 1):
-
-            self.draw_image(False, True)
+        current_page = self.imagehandler.get_current_page()
+        nb_pages = 2 if self.displayed_double() else 1
+        if current_page <= page < (current_page + nb_pages):
+            self.draw_image(scroll_to=self._last_scroll_destination)
+            self._update_page_information()
 
         # Use first page as application icon when opening archives.
         if (page == 1
@@ -477,6 +577,19 @@ class MainWindow(gtk.Window):
             and prefs['archive thumbnail as icon']):
             pixbuf = self.imagehandler.get_thumbnail(page, 48, 48)
             self.set_icon(pixbuf)
+
+    def _on_file_opened(self):
+        self.uimanager.set_sensitivities()
+        number, count = self.filehandler.get_file_number()
+        self.statusbar.set_file_number(number, count)
+        self.statusbar.update()
+
+    def _on_file_closed(self):
+        self.clear()
+        self.thumbnailsidebar.hide()
+        self.thumbnailsidebar.clear()
+        self.uimanager.set_sensitivities()
+        self.set_icon_list(*icons.mcomix_icons())
 
     def new_page(self, at_bottom=False):
         """Draw a *new* page correctly (as opposed to redrawing the same
@@ -487,48 +600,104 @@ class MainWindow(gtk.Window):
             prefs['horizontal flip'] = False
             prefs['vertical flip'] = False
 
-        self.thumbnailsidebar.update_select()
+        if at_bottom:
+            scroll_to = constants.SCROLL_TO_END
+        else:
+            scroll_to = constants.SCROLL_TO_START
 
-        self.draw_image(at_bottom=at_bottom, scroll=True)
+        self.draw_image(scroll_to=scroll_to)
+
+    @callback.Callback
+    def page_changed(self):
+        """ Called on page change. """
+        self.thumbnailsidebar.load_thumbnails()
+        self._update_page_information()
 
     def set_page(self, num, at_bottom=False):
-        if self.imagehandler.set_page(num):
-            self.new_page(at_bottom=at_bottom)
-            self.slideshow.update_delay()
-            return True
-        else:
-            return False
+        if num == self.imagehandler.get_current_page():
+            return
+        self.imagehandler.set_page(num)
+        self.page_changed()
+        self.new_page(at_bottom=at_bottom)
+        self.slideshow.update_delay()
 
-    def next_page(self, *args):
-        new_page_number = self.imagehandler.next_page()
+    def next_book(self):
+        archive_open = self.filehandler.archive_type is not None
+        next_archive_opened = False
+        if (self.slideshow.is_running() and \
+            prefs['slideshow can go to next archive']) or \
+           prefs['auto open next archive']:
+            next_archive_opened = self.filehandler._open_next_archive()
 
-        if new_page_number >= 1:
-            self.set_page(new_page_number)
+        # If "Auto open next archive" is disabled, do not go to the next
+        # directory if current file was an archive.
+        if not next_archive_opened and \
+           prefs['auto open next directory'] and \
+           (not archive_open or prefs['auto open next archive']):
+            self.filehandler.open_next_directory()
 
-    def next_page_fast_forward(self, *args):
-        page_num = self.imagehandler.get_current_page()
-        if not self.set_page(page_num + 10):
-            self.last_page()
+    def previous_book(self):
+        archive_open = self.filehandler.archive_type is not None
+        previous_archive_opened = False
+        if (self.slideshow.is_running() and \
+            prefs['slideshow can go to next archive']) or \
+            prefs['auto open next archive']:
+            previous_archive_opened = self.filehandler._open_previous_archive()
 
-    def previous_page(self, *args):
-        new_page_number = self.imagehandler.previous_page()
-        if new_page_number >= 1:
-            self.set_page(new_page_number, at_bottom=True)
+        # If "Auto open next archive" is disabled, do not go to the previous
+        # directory if current file was an archive.
+        if not previous_archive_opened and \
+            prefs['auto open next directory'] and \
+            (not archive_open or prefs['auto open next archive']):
+            self.filehandler.open_previous_directory()
 
-    def previous_page_fast_forward(self, *args):
-        page_num = self.imagehandler.get_current_page()
-        if not self.set_page(page_num - 10):
-            self.first_page()
+    def flip_page(self, step, single_step=False):
 
-    def first_page(self, *args):
-        new_page_number = self.imagehandler.first_page()
-        if new_page_number >= 1:
-            self.set_page(new_page_number)
+        if not self.filehandler.file_loaded:
+            if -1 == step:
+                self.previous_book()
+            elif 1 == step:
+                self.next_book()
+            return
 
-    def last_page(self, *args):
-        new_page_number = self.imagehandler.last_page()
-        if new_page_number >= 1:
-            self.set_page(new_page_number)
+        current_page = self.imagehandler.get_current_page()
+        number_of_pages = self.imagehandler.get_number_of_pages()
+
+        new_page = current_page + step
+        if (1 == abs(step) and
+            not single_step and
+            prefs['default double page'] and
+            prefs['double step in double page mode']):
+            if +1 == step and not self.imagehandler.get_virtual_double_page():
+                new_page += 1
+            elif -1 == step and not self.imagehandler.get_virtual_double_page(new_page - 1):
+                new_page -= 1
+
+        if new_page <= 0:
+            # Only switch to previous page when flipping one page before the
+            # first one. (Note: check for (page number <= 1) to handle empty
+            # archive case).
+            if -1 == step and current_page <= 1:
+                return self.previous_book()
+            # Handle empty archive case.
+            new_page = min(1, number_of_pages)
+        elif new_page > number_of_pages:
+            if 1 == step:
+                return self.next_book()
+            new_page = number_of_pages
+
+        if new_page != current_page:
+            self.set_page(new_page, at_bottom=(-1 == step))
+
+    def first_page(self):
+        number_of_pages = self.imagehandler.get_number_of_pages()
+        if number_of_pages:
+            self.set_page(1)
+
+    def last_page(self):
+        number_of_pages = self.imagehandler.get_number_of_pages()
+        if number_of_pages:
+            self.set_page(number_of_pages)
 
     def page_select(self, *args):
         pageselect.Pageselector(self)
@@ -555,42 +724,38 @@ class MainWindow(gtk.Window):
 
     def change_double_page(self, toggleaction):
         prefs['default double page'] = toggleaction.get_active()
-        self.is_double_page = toggleaction.get_active()
+        self._update_page_information()
         self.draw_image()
 
     def change_manga_mode(self, toggleaction):
         prefs['default manga mode'] = toggleaction.get_active()
         self.is_manga_mode = toggleaction.get_active()
+        self._update_page_information()
         self.draw_image()
 
     def change_invert_scroll(self, toggleaction):
         prefs['invert smart scroll'] = toggleaction.get_active()
 
+    @property
+    def is_fullscreen(self):
+        window_state = self.window.get_state()
+        return 0 != (window_state & gtk.gdk.WINDOW_STATE_FULLSCREEN)
+
     def change_fullscreen(self, toggleaction):
-        self.is_fullscreen = toggleaction.get_active()
-        if self.is_fullscreen:
+        # Disable action until transition if complete.
+        toggleaction.set_sensitive(False)
+        if toggleaction.get_active():
+            self.save_window_geometry()
             self.fullscreen()
-
-            if (prefs['hide all in fullscreen'] and
-                not prefs['hide all']):
-
-                self.hide_all_forced = True
-                self.change_hide_all()
         else:
             self.unfullscreen()
-
-            if (prefs['hide all in fullscreen'] and
-                prefs['hide all'] and
-                self.hide_all_forced):
-
-                self.change_hide_all()
-
-            self.hide_all_forced = False
+        # No need to call draw_image explicitely,
+        # as we'll be receiving a window state
+        # change or resize event.
 
     def change_zoom_mode(self, radioaction=None, *args):
         if radioaction:
             prefs['zoom mode'] = radioaction.get_current_value()
-
         self.zoom.set_fit_mode(prefs['zoom mode'])
         self.zoom.set_scale_up(prefs['stretch'])
         self.zoom.reset_user_zoom()
@@ -601,7 +766,6 @@ class MainWindow(gtk.Window):
         radiobutton is currently activated. """
         if radioaction:
             prefs['auto rotate depending on size'] = radioaction.get_current_value()
-
         self.draw_image()
 
     def change_stretch(self, toggleaction, *args):
@@ -610,35 +774,23 @@ class MainWindow(gtk.Window):
         self.zoom.set_scale_up(prefs['stretch'])
         self.draw_image()
 
-    def change_toolbar_visibility(self, *args):
-        prefs['show toolbar'] = not prefs['show toolbar']
-        self.draw_image()
+    def change_toolbar_visibility(self, toggleaction):
+        self._update_toggle_preference('show toolbar', toggleaction)
 
-    def change_menubar_visibility(self, *args):
-        prefs['show menubar'] = not prefs['show menubar']
-        self.draw_image()
+    def change_menubar_visibility(self, toggleaction):
+        self._update_toggle_preference('show menubar', toggleaction)
 
-    def change_statusbar_visibility(self, *args):
-        prefs['show statusbar'] = not prefs['show statusbar']
-        self.draw_image()
+    def change_statusbar_visibility(self, toggleaction):
+        self._update_toggle_preference('show statusbar', toggleaction)
 
-    def change_scrollbar_visibility(self, *args):
-        prefs['show scrollbar'] = not prefs['show scrollbar']
-        self.draw_image()
+    def change_scrollbar_visibility(self, toggleaction):
+        self._update_toggle_preference('show scrollbar', toggleaction)
 
-    def change_thumbnails_visibility(self, *args):
-        prefs['show thumbnails'] = not prefs['show thumbnails']
-        self.draw_image()
+    def change_thumbnails_visibility(self, toggleaction):
+        self._update_toggle_preference('show thumbnails', toggleaction)
 
-    def change_hide_all(self, *args):
-        prefs['hide all'] = not prefs['hide all']
-        sensitive = not prefs['hide all']
-        self.actiongroup.get_action('toolbar').set_sensitive(sensitive)
-        self.actiongroup.get_action('menubar').set_sensitive(sensitive)
-        self.actiongroup.get_action('statusbar').set_sensitive(sensitive)
-        self.actiongroup.get_action('scrollbar').set_sensitive(sensitive)
-        self.actiongroup.get_action('thumbnails').set_sensitive(sensitive)
-        self.draw_image()
+    def change_hide_all(self, toggleaction):
+        self._update_toggle_preference('hide all', toggleaction)
 
     def change_keep_transformation(self, *args):
         prefs['keep transformation'] = not prefs['keep transformation']
@@ -658,15 +810,12 @@ class MainWindow(gtk.Window):
     def _show_scrollbars(self, request):
         """ Enables scroll bars depending on requests and preferences. """
 
-        limit = prefs['show scrollbar'] and \
-            not prefs['hide all'] and\
-            not (self.is_fullscreen and \
-            prefs['hide all in fullscreen'])
+        limit = self._should_toggle_be_visible('show scrollbar')
         for i in range(len(self._scroll)):
             if limit and request[i]:
-                self._scroll[i].show_all()
+                self._scroll[i].show()
             else:
-                self._scroll[i].hide_all()
+                self._scroll[i].hide()
 
     def is_scrollable_horizontally(self):
         """ Returns True when the displayed image does not fit into the display
@@ -762,10 +911,9 @@ class MainWindow(gtk.Window):
 
     def clear(self):
         """Clear the currently displayed data (i.e. "close" the file)."""
-        self._clear_main_area()
         self.set_title(constants.APPNAME)
         self.statusbar.set_message('')
-        enhance_dialog.clear_histogram()
+        self.draw_image()
 
     def _clear_main_area(self):
         for i in self.images:
@@ -779,41 +927,24 @@ class MainWindow(gtk.Window):
 
     def displayed_double(self):
         """Return True if two pages are currently displayed."""
-        return (self.is_double_page and not self.is_virtual_double_page and
-            self.imagehandler.get_current_page() !=
-            self.imagehandler.get_number_of_pages())
+        return (self.imagehandler.get_current_page() and
+                prefs['default double page'] and
+                not self.imagehandler.get_virtual_double_page() and
+                self.imagehandler.get_current_page() != self.imagehandler.get_number_of_pages())
 
     def get_visible_area_size(self):
         """Return a 2-tuple with the width and height of the visible part
         of the main layout area.
         """
-        width, height = self.get_size()
+        dimensions = list(self.get_size())
 
-        if not prefs['hide all']:
+        for preference, action, widget_list in self._toggle_list:
+            for widget in widget_list:
+                if widget.get_visible():
+                    axis = self._toggle_axis[widget]
+                    dimensions[axis] -= widget.size_request()[axis]
 
-            if prefs['show toolbar']:
-                height -= self.toolbar.size_request()[1]
-
-            if prefs['show statusbar']:
-                height -= self.statusbar.size_request()[1]
-
-            if prefs['show thumbnails']:
-                width -= self.thumbnailsidebar.get_width()
-
-            if prefs['show menubar']:
-                height -= self.menubar.size_request()[1]
-
-            if prefs['show scrollbar']:
-
-                if self._scroll[constants.HEIGHT_AXIS].get_visible():
-                    width -= self._scroll[constants.HEIGHT_AXIS]\
-                        .size_request()[constants.WIDTH_AXIS]
-
-                if self._scroll[constants.WIDTH_AXIS].get_visible():
-                    height -= self._scroll[constants.WIDTH_AXIS]\
-                        .size_request()[constants.HEIGHT_AXIS]
-
-        return width, height
+        return tuple(dimensions)
 
     def get_layout_pointer_position(self):
         """Return a 2-tuple with the x and y coordinates of the pointer
@@ -855,8 +986,9 @@ class MainWindow(gtk.Window):
         format (r, g, b). Values are 16-bit.
         """
         self._main_layout.modify_bg(gtk.STATE_NORMAL,
-            gtk.gdk.colormap_get_system().alloc_color(gtk.gdk.Color(
-            colour[0], colour[1], colour[2]), False, True))
+                                    gtk.gdk.Color(colour[0],
+                                                  colour[1],
+                                                  colour[2]))
 
         if prefs['thumbnail bg uses main colour']:
             self.thumbnailsidebar.change_thumbnail_background_color(prefs['bg colour'])
@@ -864,41 +996,6 @@ class MainWindow(gtk.Window):
 
     def get_bg_colour(self):
         return self._bg_colour
-
-    def _display_active_widgets(self):
-        """Hide and/or show main window widgets depending on the current
-        state.
-        """
-
-        if not prefs['hide all']:
-
-            if prefs['show toolbar']:
-                self.toolbar.show_all()
-            else:
-                self.toolbar.hide_all()
-
-            if prefs['show statusbar']:
-                self.statusbar.show_all()
-            else:
-                self.statusbar.hide_all()
-
-            if prefs['show menubar']:
-                self.menubar.show_all()
-            else:
-                self.menubar.hide_all()
-
-            if prefs['show thumbnails'] and self.filehandler.file_loaded:
-                self.thumbnailsidebar.show()
-            else:
-                self.thumbnailsidebar.hide()
-
-        else:
-            self.toolbar.hide_all()
-            self.menubar.hide_all()
-            self.statusbar.hide_all()
-            self.thumbnailsidebar.hide()
-            self._scroll[constants.HEIGHT_AXIS].hide_all()
-            self._scroll[constants.WIDTH_AXIS].hide_all()
 
     def extract_page(self, *args):
         """ Derive some sensible filename (archive name + _ + filename should do) and offer
@@ -927,7 +1024,7 @@ class MainWindow(gtk.Window):
         a confirmation dialog. """
 
         current_file = self.imagehandler.get_real_path()
-        dialog = message_dialog.MessageDialog(None, gtk.DIALOG_MODAL, gtk.MESSAGE_QUESTION,
+        dialog = message_dialog.MessageDialog(self, gtk.DIALOG_MODAL, gtk.MESSAGE_QUESTION,
                 gtk.BUTTONS_NONE)
         dialog.set_should_remember_choice('delete-opend-file', (gtk.RESPONSE_OK,))
         dialog.set_text(
@@ -955,9 +1052,9 @@ class MainWindow(gtk.Window):
                 if self.imagehandler.get_number_of_pages() > 1:
                     # Open the next/previous file
                     if self.imagehandler.get_current_page() >= self.imagehandler.get_number_of_pages():
-                        self.previous_page()
+                        self.flip_page(-1)
                     else:
-                        self.next_page()
+                        self.flip_page(+1)
                     # Unlink the desired file
                     if os.path.isfile(current_file):
                         os.unlink(current_file)
@@ -974,12 +1071,21 @@ class MainWindow(gtk.Window):
         if not self.filehandler.file_loaded:
             return
 
-        filename = self.imagehandler.get_pretty_current_filename().encode('utf-8')
-        page_text = '%s %s' % (_('Page'), self.statusbar.get_page_number())
-        if self.statusbar.get_file_number():
-            page_text += ' ' + self.statusbar.get_file_number()
-
-        self.osd.show(filename + "\n\n" + page_text)
+        text = u''
+        filename = self.imagehandler.get_pretty_current_filename()
+        if filename:
+            text += u'%s\n' % filename
+        file_number, file_count = self.filehandler.get_file_number()
+        if file_count:
+            text += u'(%d / %d)\n' % (file_number, file_count)
+        else:
+            text += u'\n'
+        page_number = self.imagehandler.get_current_page()
+        if page_number:
+            text += u'%s %s' % (_('Page'), page_number)
+        text = text.strip('\n')
+        if text:
+            self.osd.show(text)
 
     def minimize(self, *args):
         """ Minimizes the MComix window. """
@@ -997,12 +1103,36 @@ class MainWindow(gtk.Window):
     def save_and_terminate_program(self, *args):
         prefs['previous quit was quit and save'] = True
 
-        self.terminate_program(save_current_file=True)
+        self.terminate_program()
+
+    def get_window_geometry(self):
+        return self.get_position() + self.get_size()
+
+    def save_window_geometry(self):
+        (
+            prefs['window x'],
+            prefs['window y'],
+            prefs['window width'],
+            prefs['window height'],
+
+        ) = self.get_window_geometry()
+
+    def restore_window_geometry(self):
+        if self.get_window_geometry() == (prefs['window x'],
+                                          prefs['window y'],
+                                          prefs['window width'],
+                                          prefs['window height']):
+            return False
+        self.resize(prefs['window width'], prefs['window height'])
+        self.move(prefs['window x'], prefs['window y'])
+        return True
 
     def close_program(self, *args):
-        self.terminate_program(save_current_file=False)
+        if not self.is_fullscreen:
+            self.save_window_geometry()
+        self.terminate_program()
 
-    def terminate_program(self, save_current_file=False):
+    def terminate_program(self):
         """Run clean-up tasks and exit the program."""
 
         self.hide()
@@ -1023,9 +1153,7 @@ class MainWindow(gtk.Window):
 
         self.write_config_files()
 
-        self.filehandler.cleanup()
-        self.imagehandler.cleanup()
-        self.thumbnailsidebar.clear()
+        self.filehandler.close_file()
         if main_dialog._dialog is not None:
             main_dialog._dialog.close()
         backend.LibraryBackend().close()

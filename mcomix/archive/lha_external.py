@@ -34,18 +34,9 @@ class LhaArchive(archive_base.ExternalExecutableArchive):
         """ Tries to start lha, and returns either 'lha' if
         it was started successfully or None otherwise. """
         global _lha_executable
-        if _lha_executable != -1:
-            return _lha_executable
-        else:
-            proc = process.Process([u'lha'])
-            fd = proc.spawn()
-            if fd is not None:
-                fd.close()
-                _lha_executable = u'lha'
-                return u'lha'
-            else:
-                _lha_executable = None
-                return None
+        if _lha_executable == -1:
+            _lha_executable = process.find_executable((u'lha',))
+        return _lha_executable
 
     @staticmethod
     def is_available():

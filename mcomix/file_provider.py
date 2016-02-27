@@ -96,20 +96,14 @@ class OrderedFileProvider(FileProvider):
         """ Sets the base directory. """
 
         if os.path.isdir(file_or_directory):
-            self.base_dir = os.path.abspath(file_or_directory)
-            self.mode = OrderedFileProvider.IMAGES
+            dir = file_or_directory
         elif os.path.isfile(file_or_directory):
-            self.base_dir = os.path.abspath(os.path.dirname(file_or_directory))
-
-            if image_tools.is_image_file(file_or_directory):
-                self.mode = OrderedFileProvider.IMAGES
-            elif archive_tools.archive_mime_type(file_or_directory) is not None:
-                self.mode = OrderedFileProvider.ARCHIVES
-            else:
-                self.mode = OrderedFileProvider.IMAGES
+            dir = os.path.dirname(file_or_directory)
         else:
             # Passed file doesn't exist
             raise ValueError(_("Invalid path: '%s'") % file_or_directory)
+
+        self.base_dir = os.path.abspath(dir)
 
     def get_directory(self):
         return self.base_dir
@@ -119,10 +113,9 @@ class OrderedFileProvider(FileProvider):
             Returns a list of absolute paths, already sorted. """
 
         if mode == FileProvider.IMAGES:
-            should_accept = lambda file: image_tools.is_image_file(file)
+            should_accept = image_tools.is_image_file
         elif mode == FileProvider.ARCHIVES:
-            should_accept = lambda file: \
-                archive_tools.get_supported_archive_regex().search(file, re.I) is not None
+            should_accept = archive_tools.is_archive_file
         else:
             should_accept = lambda file: True
 
@@ -214,17 +207,14 @@ class PreDefinedFileProvider(FileProvider):
         depending on what type of file is found first in the list. """
 
         for file in files:
-            if os.path.isfile(file) and image_tools.is_image_file(file):
-                return lambda file: \
-                        image_tools.is_image_file(file)
-
-            elif (os.path.isfile(file) and
-                  archive_tools.get_supported_archive_regex().search(file, re.I) is not None):
-                return lambda file: \
-                        archive_tools.get_supported_archive_regex().search(file, re.I) is not None
+            if os.path.isfile(file):
+                if image_tools.is_image_file(file):
+                    return image_tools.is_image_file
+                if archive_tools.is_archive_file(file):
+                    return archive_tools.is_archive_file
 
         # Default filter only accepts images.
-        return lambda file: image_tools.is_image_file(file)
+        return image_tools.is_image_file
 
 
 # vim: expandtab:sw=4:ts=4

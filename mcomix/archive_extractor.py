@@ -6,13 +6,12 @@ import threading
 import traceback
 
 from mcomix import archive_tools
-from mcomix import constants
 from mcomix import callback
 from mcomix import log
 from mcomix.preferences import prefs
 from mcomix.worker_thread import WorkerThread
 
-class Extractor:
+class Extractor(object):
 
     """Extractor is a threaded class for extracting different archive formats.
 
@@ -38,10 +37,9 @@ class Extractor:
         """
         self._src = src
         self._dst = dst
-        self._type = type or archive_tools.archive_mime_type(src)
         self._files = []
         self._extracted = set()
-        self._archive = archive_tools.get_recursive_archive_handler(src, dst, type=self._type)
+        self._archive = archive_tools.get_recursive_archive_handler(src, dst, type=type)
         if self._archive is None:
             msg = _('Non-supported archive format: %s') % os.path.basename(src)
             log.warning(msg)
@@ -87,6 +85,9 @@ class Extractor:
             if not self._contents_listed:
                 return
             self._files = [f for f in files if f not in self._extracted]
+            if not self._files:
+                # Nothing to do!
+                return
             if self._extract_started:
                 self.extract()
 
@@ -96,10 +97,6 @@ class Extractor:
         """
         with self._condition:
             return name in self._extracted
-
-    def get_mime_type(self):
-        """Return the mime type name of the extractor's current archive."""
-        return self._type
 
     def stop(self):
         """Signal the extractor to stop extracting and kill the extracting
@@ -209,6 +206,8 @@ class Extractor:
             log.error(_('! Extraction error: %s'), ex)
             log.debug('Traceback:\n%s', traceback.format_exc())
 
+        if self._extract_thread.must_stop():
+            return
         self._extraction_finished(name)
 
     def _list_contents(self, archive):

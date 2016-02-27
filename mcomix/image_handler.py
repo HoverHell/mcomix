@@ -1,9 +1,7 @@
 """image_handler.py - Image handler that takes care of cacheing and giving out images."""
 
 import os
-import threading
-import gtk
-import Queue
+import traceback
 
 from mcomix.preferences import prefs
 from mcomix import i18n
@@ -15,7 +13,7 @@ from mcomix import callback
 from mcomix import log
 from mcomix.worker_thread import WorkerThread
 
-class ImageHandler:
+class ImageHandler(object):
 
     """The FileHandler keeps track of images, pages, caches and reads files.
 
@@ -52,16 +50,13 @@ class ImageHandler:
         #: How many pages to keep in cache
         self._cache_pages = prefs['max pages to cache']
 
-        #: Advance only one page instead of two in double page mode
-        self.force_single_step = False
-
         self._window.filehandler.file_available += self._file_available
 
     def _get_pixbuf(self, index):
         """Return the pixbuf indexed by <index> from cache.
         Pixbufs not found in cache are fetched from disk first.
         """
-        pixbuf = constants.MISSING_IMAGE_ICON
+        pixbuf = image_tools.MISSING_IMAGE_ICON
 
         if index not in self._raw_pixbufs:
             self._wait_on_page(index + 1)
@@ -73,7 +68,7 @@ class ImageHandler:
                 self._raw_pixbufs[index] = pixbuf
                 tools.garbage_collect()
             except Exception, e:
-                self._raw_pixbufs[index] = constants.MISSING_IMAGE_ICON
+                self._raw_pixbufs[index] = image_tools.MISSING_IMAGE_ICON
                 log.error('Could not load pixbuf for page %u: %r', index + 1, e)
         else:
             try:
@@ -144,128 +139,45 @@ class ImageHandler:
         log.debug('Caching page %u', index + 1)
         self._get_pixbuf(index)
 
-    def next_page(self):
-        """Set up filehandler to the next page. Return the new page number.
-        """
-        if not self._window.filehandler.file_loaded and self._window.filehandler.archive_type is None:
-            return False
-
-        viewed = self._window.displayed_double() and 2 or 1
-
-        if self.get_current_page() + viewed > self.get_number_of_pages():
-
-            archive_open = self._window.filehandler.archive_type is not None
-            next_archive_opened = False
-            if (self._window.slideshow.is_running() and \
-                prefs['slideshow can go to next archive']) or \
-                prefs['auto open next archive']:
-                next_archive_opened = self._window.filehandler._open_next_archive()
-
-            # If "Auto open next archive" is disabled, do not go to the next
-            # directory if current file was an archive.
-            if not next_archive_opened and \
-                prefs['auto open next directory'] and \
-                (not archive_open or prefs['auto open next archive']):
-                self._window.filehandler.open_next_directory()
-
-            return False
-
-        self._current_image_index += self._get_forward_step_length()
-
-        return self.get_current_page()
-
-    def previous_page(self):
-        """Set up filehandler to the previous page. Return the new page number.
-        """
-        if not self._window.filehandler.file_loaded and self._window.filehandler.archive_type is None:
-            return False
-
-        if self.get_current_page() <= 1:
-
-            archive_open = self._window.filehandler.archive_type is not None
-            previous_archive_opened = False
-            if (self._window.slideshow.is_running() and \
-                prefs['slideshow can go to next archive']) or \
-                prefs['auto open next archive']:
-                previous_archive_opened = self._window.filehandler._open_previous_archive()
-
-            # If "Auto open next archive" is disabled, do not go to the previous
-            # directory if current file was an archive.
-            if not previous_archive_opened and \
-                prefs['auto open next directory'] and \
-                (not archive_open or prefs['auto open next archive']):
-                self._window.filehandler.open_previous_directory()
-
-            return False
-
-        step = self._get_backward_step_length()
-        step = min(self._current_image_index, step)
-        self._current_image_index -= step
-
-        if (step == 2 and self.get_virtual_double_page()):
-            self._current_image_index += 1
-
-        return self.get_current_page()
-
-    def first_page(self):
-        """Set up filehandler to the first page. Return the new page number.
-        """
-        if not self._window.filehandler.file_loaded:
-            return False
-
-        self._current_image_index = 0
-        return self.get_current_page()
-
-    def last_page(self):
-        """Set up filehandler to the last page. Return the new page number.
-        """
-        if not self._window.filehandler.file_loaded:
-            return False
-        offset = self._window.is_double_page and 2 or 1
-        offset = min(self.get_number_of_pages(), offset)
-        self._current_image_index = self.get_number_of_pages() - offset
-        if (offset == 2 and self.get_virtual_double_page()):
-            self._current_image_index += 1
-        return self.get_current_page()
-
     def set_page(self, page_num):
-        """Set up filehandler to the page <page_num>. Return the new page number.
+        """Set up filehandler to the page <page_num>.
         """
-        if not 0 < page_num <= self.get_number_of_pages():
-            return False
-
+        assert 0 < page_num <= self.get_number_of_pages()
         self._current_image_index = page_num - 1
         self.do_cacheing()
 
-        return self.get_current_page()
-
-    def get_virtual_double_page(self):
+    def get_virtual_double_page(self, page=None):
         """Return True if the current state warrants use of virtual
         double page mode (i.e. if double page mode is on, the corresponding
         preference is set, and one of the two images that should normally
         be displayed has a width that exceeds its height), or if currently
         on the first page.
         """
-        if (self.get_current_page() == 1 and
+        if page == None:
+            page = self.get_current_page()
+
+        if (page == 1 and
             prefs['virtual double page for fitting images'] & constants.SHOW_DOUBLE_AS_ONE_TITLE and
             self._window.filehandler.archive_type is not None):
             return True
 
-        if (not self._window.is_double_page or
-          not prefs['virtual double page for fitting images'] & constants.SHOW_DOUBLE_AS_ONE_WIDE or
-          self.get_current_page() == self.get_number_of_pages()):
+        if (not prefs['default double page'] or
+            not prefs['virtual double page for fitting images'] & constants.SHOW_DOUBLE_AS_ONE_WIDE or
+            page == self.get_number_of_pages()):
             return False
 
-        if not self.page_is_available(self._current_image_index + 1):
-            return False
-        page1 = self._get_pixbuf(self._current_image_index)
-        if page1.get_width() > page1.get_height():
-            return True
-        if not self.page_is_available(self._current_image_index + 2):
-            return False
-        page2 = self._get_pixbuf(self._current_image_index + 1)
-        if page2.get_width() > page2.get_height():
-            return True
+        for page in (page, page + 1):
+            if not self.page_is_available(page):
+                return False
+            pixbuf = self._get_pixbuf(page - 1)
+            width, height = pixbuf.get_width(), pixbuf.get_height()
+            if prefs['auto rotate from exif']:
+                rotation = image_tools.get_implied_rotation(pixbuf)
+                assert rotation in (0, 90, 180, 270)
+                if rotation in (90, 270):
+                    width, height = height, width
+            if width > height:
+                return True
 
         return False
 
@@ -278,13 +190,13 @@ class ImageHandler:
             return self._window.filehandler.get_path_to_base()
         return self.get_path_to_page()
 
-    def close(self, *args):
-        """Run tasks for "closing" the currently opened file(s)."""
+    def cleanup(self):
+        """Run clean-up tasks. Should be called prior to exit."""
 
         self.first_wanted = 0
         self.last_wanted = 1
 
-        self.cleanup()
+        self._thread.stop()
         self._base_path = None
         self._image_files = []
         self._current_image_index = None
@@ -292,28 +204,23 @@ class ImageHandler:
         self._raw_pixbufs.clear()
         self._cache_pages = prefs['max pages to cache']
 
-        tools.garbage_collect()
-
-    def cleanup(self):
-        """Run clean-up tasks. Should be called prior to exit."""
-        self._thread.stop()
-
     def page_is_available(self, page=None):
         """ Returns True if <page> is available and calls to get_pixbufs
         would not block. If <page> is None, the current page(s) are assumed. """
 
         if page is None:
             current_page = self.get_current_page()
-            if self._window.displayed_double():
-                pages = [ current_page, current_page + 1 ]
-            else:
-                pages = [ current_page ]
+            if not current_page:
+                # Current 'book' has no page.
+                return False
+            index_list = [ current_page - 1 ]
+            if self._window.displayed_double() and current_page < len(self._image_files):
+                index_list.append(current_page)
         else:
-            pages = [ page ]
+            index_list = [ page - 1 ]
 
-        for page in pages:
-            path = self.get_path_to_page(page)
-            if not self._window.filehandler.file_is_available(path):
+        for index in index_list:
+            if not index in self._available_images:
                 return False
 
         return True
@@ -348,13 +255,6 @@ class ImageHandler:
             if tools.bin_search(available, imgpath) >= 0:
                 self.page_available(i + 1)
 
-    def is_last_page(self):
-        """Return True if at the last page."""
-        if self._window.displayed_double():
-            return self.get_current_page() + 1 >= self.get_number_of_pages()
-        else:
-            return self.get_current_page() == self.get_number_of_pages()
-
     def get_number_of_pages(self):
         """Return the number of pages in the current archive/directory."""
         if self._image_files is not None:
@@ -374,13 +274,12 @@ class ImageHandler:
         page if <page> is None.
         """
         if page is None:
-            if self._current_image_index < len(self._image_files):
-                return self._image_files[self._current_image_index]
-            else:
-                return None
+            index = self._current_image_index
+        else:
+            index = page - 1
 
-        if page - 1 < len(self._image_files):
-            return self._image_files[page - 1]
+        if 0 <= index < len(self._image_files):
+            return self._image_files[index]
         else:
             return None
 
@@ -391,7 +290,7 @@ class ImageHandler:
         page) and p' is the filename of the page after.
         """
         if page is None:
-            page = self._current_image_index + 1
+            page = self.get_current_page()
 
         first_path = self.get_path_to_page(page)
         if first_path == None:
@@ -434,16 +333,11 @@ class ImageHandler:
         self._wait_on_page(page)
 
         page_path = self.get_path_to_page(page)
-
-        if page_path != None:
-            info = gtk.gdk.pixbuf_get_file_info(page_path)
-        else:
-            return None
-
-        if info is not None:
-            return (info[1], info[2])
-        else:
+        if page_path is None:
             return (0, 0)
+
+        format, width, height = image_tools.get_image_info(page_path)
+        return (width, height)
 
     def get_mime_name(self, page=None):
         """Return a string with the name of the mime type of <page>. If
@@ -452,16 +346,11 @@ class ImageHandler:
         self._wait_on_page(page)
 
         page_path = self.get_path_to_page(page)
-
-        if page_path != None:
-            info = gtk.gdk.pixbuf_get_file_info(page_path)
-        else:
+        if page_path is None:
             return None
 
-        if info is not None:
-            return info[0]['name'].upper()
-        else:
-            return _('Unknown filetype')
+        format, width, height = image_tools.get_image_info(page_path)
+        return format
 
     def get_thumbnail(self, page=None, width=128, height=128, create=False,
                       nowait=False):
@@ -474,8 +363,6 @@ class ImageHandler:
 
         If <nowait> is True, don't wait for <page> to be available.
         """
-        if page is None:
-            page = self.get_current_page()
         if not self._wait_on_page(page, check_only=nowait):
             # Page is not available!
             return None
@@ -485,30 +372,13 @@ class ImageHandler:
             return None
 
         try:
-            thumbnailer = thumbnail_tools.Thumbnailer()
-            thumbnailer.set_store_on_disk(create)
-            thumbnailer.set_size(width, height)
+            thumbnailer = thumbnail_tools.Thumbnailer(store_on_disk=create,
+                                                      size=(width, height))
             return thumbnailer.thumbnail(path)
         except Exception:
-            return constants.MISSING_IMAGE_ICON
-
-    def _get_forward_step_length(self):
-        """Return the step length for switching pages forwards."""
-        if self.force_single_step:
-            return 1
-        elif (prefs['double step in double page mode'] and \
-            self._window.displayed_double()):
-            return 2
-        return 1
-
-    def _get_backward_step_length(self):
-        """Return the step length for switching pages backwards."""
-        if self.force_single_step:
-            return 1
-        elif (prefs['double step in double page mode'] and \
-            self._window.is_double_page):
-            return 2
-        return 1
+            log.debug("Failed to create thumbnail for image `%s':\n%s",
+                      path, traceback.format_exc())
+            return image_tools.MISSING_IMAGE_ICON
 
     def _wait_on_page(self, page, check_only=False):
         """Block the running (main) thread until the file corresponding to
@@ -516,7 +386,10 @@ class ImageHandler:
 
         If <check_only> is True, only check (and return status), don't wait.
         """
-        index = page - 1
+        if page is None:
+            index = self._current_image_index
+        else:
+            index = page - 1
         if index in self._available_images:
             # Already extracted!
             return True
@@ -533,7 +406,7 @@ class ImageHandler:
         """Ask for pages around <page> to be given priority extraction.
         """
         files = []
-        if self._window.is_double_page:
+        if prefs['default double page']:
             page_width = 2
         else:
             page_width = 1

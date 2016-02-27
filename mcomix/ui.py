@@ -19,10 +19,13 @@ from mcomix.library import main_dialog as library_main_dialog
 class MainUI(gtk.UIManager):
 
     def __init__(self, window):
-        gtk.UIManager.__init__(self)
+        super(MainUI, self).__init__()
 
         self._window = window
         self._tooltipstatus = status.TooltipStatusHelper(self, window.statusbar)
+
+        def _action_lambda(fn, *args):
+            return lambda *_: fn(*args)
 
         # ----------------------------------------------------------------
         # Create actions for the menus.
@@ -36,13 +39,13 @@ class MainUI(gtk.UIManager):
                 None, _('Deletes the current file or archive from disk.'),
                 window.delete),
             ('next_page', gtk.STOCK_GO_FORWARD, _('_Next page'),
-                None, _('Next page'), window.next_page),
+             None, _('Next page'), _action_lambda(window.flip_page, +1)),
             ('previous_page', gtk.STOCK_GO_BACK, _('_Previous page'),
-                None, _('Previous page'), window.previous_page),
+             None, _('Previous page'), _action_lambda(window.flip_page, -1)),
             ('first_page', gtk.STOCK_GOTO_FIRST, _('_First page'),
-                None, _('First page'), window.first_page),
+             None, _('First page'), _action_lambda(window.first_page)),
             ('last_page', gtk.STOCK_GOTO_LAST, _('_Last page'),
-                None, _('Last page'), window.last_page),
+             None, _('Last page'), _action_lambda(window.last_page)),
             ('go_to', gtk.STOCK_JUMP_TO, _('_Go to page...'),
                 None, _('Go to page...'), window.page_select),
             ('refresh_archive', gtk.STOCK_REFRESH, _('Re_fresh'),
@@ -65,7 +68,7 @@ class MainUI(gtk.UIManager):
             ('minimize', gtk.STOCK_LEAVE_FULLSCREEN, _('Mi_nimize'),
                 None, None, window.minimize),
             ('close', gtk.STOCK_CLOSE, _('_Close'),
-                None, _('Closes all opened files.'), window.filehandler.close_file),
+                None, _('Closes all opened files.'), _action_lambda(window.filehandler.close_file)),
             ('quit', gtk.STOCK_QUIT, _('_Quit'),
                 None, None, window.close_program),
             ('save_and_quit', gtk.STOCK_QUIT, _('_Save and quit'),
@@ -454,10 +457,6 @@ class MainUI(gtk.UIManager):
                    'keep_transformation',
                    'enhance_image')
 
-        unavailable_file = ('next_archive',
-                              'previous_archive',
-                              'next_directory',
-                              'previous_directory')
         comment = ('comments',)
 
         general_sensitive = False
@@ -474,10 +473,6 @@ class MainUI(gtk.UIManager):
 
         for name in comment:
             self._actiongroup.get_action(name).set_sensitive(comment_sensitive)
-
-        if self._window.filehandler.file_load_failed:
-            for name in unavailable_file:
-                self._actiongroup.get_action(name).set_sensitive(True)
 
         self.bookmarks.set_sensitive(general_sensitive)
         self.bookmarks_popup.set_sensitive(general_sensitive)

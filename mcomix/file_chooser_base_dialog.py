@@ -49,9 +49,8 @@ class _BaseFileChooserDialog(gtk.Dialog):
             buttons = (gtk.STOCK_CANCEL, gtk.RESPONSE_CANCEL,
                 gtk.STOCK_SAVE, gtk.RESPONSE_OK)
 
-        gtk.Dialog.__init__(self, title, None, 0, buttons)
+        super(_BaseFileChooserDialog, self).__init__(title, None, 0, buttons)
         self.set_default_response(gtk.RESPONSE_OK)
-        self.set_has_separator(False)
 
         self.filechooser = gtk.FileChooserWidget(action=action)
         self.filechooser.set_size_request(680, 420)
@@ -69,55 +68,21 @@ class _BaseFileChooserDialog(gtk.Dialog):
         preview_box.pack_start(self._preview_image, False, False)
         self.filechooser.set_preview_widget(preview_box)
 
+        pango_scale_small = (1 / 1.2)
+
         self._namelabel = labels.FormattedLabel(weight=pango.WEIGHT_BOLD,
-            scale=pango.SCALE_SMALL)
+            scale=pango_scale_small)
         self._namelabel.set_ellipsize(pango.ELLIPSIZE_MIDDLE)
         preview_box.pack_start(self._namelabel, False, False)
 
-        self._sizelabel = labels.FormattedLabel(scale=pango.SCALE_SMALL)
+        self._sizelabel = labels.FormattedLabel(scale=pango_scale_small)
         self._sizelabel.set_ellipsize(pango.ELLIPSIZE_MIDDLE)
         preview_box.pack_start(self._sizelabel, False, False)
         self.filechooser.set_use_preview_label(False)
         preview_box.show_all()
         self.filechooser.connect('update-preview', self._update_preview)
 
-        self._all_files_filter = self.add_filter(
-            _('All files'), [], ['*'])
-
-        # Determine which types should go into 'All archives' based on
-        # extractor availability.
-        mimetypes = constants.ZIP_FORMATS[0] + constants.TAR_FORMATS[0]
-        patterns = constants.ZIP_FORMATS[1] + constants.TAR_FORMATS[1]
-        if archive_tools.rar_available():
-            mimetypes += constants.RAR_FORMATS[0]
-            patterns += constants.RAR_FORMATS[1]
-        if archive_tools.szip_available():
-            mimetypes += constants.SZIP_FORMATS[0]
-            patterns += constants.SZIP_FORMATS[1]
-        if archive_tools.lha_available():
-            mimetypes += constants.LHA_FORMATS[0]
-            patterns += constants.LHA_FORMATS[1]
-
-        self.add_filter(_('All Archives'),
-            mimetypes, patterns)
-
-        self.add_filter(_('ZIP archives'),
-                *constants.ZIP_FORMATS)
-
-        self.add_filter(_('Tar archives'),
-            *constants.TAR_FORMATS)
-
-        if archive_tools.rar_available():
-            self.add_filter(_('RAR archives'),
-                *constants.RAR_FORMATS)
-
-        if archive_tools.szip_available():
-            self.add_filter(_('7z archives'),
-                *constants.SZIP_FORMATS)
-
-        if archive_tools.lha_available():
-            self.add_filter(_('LHA archives'),
-                *constants.LHA_FORMATS)
+        self._all_files_filter = self.add_filter( _('All files'), [], ['*'])
 
         try:
             current_file = self._current_file()
@@ -155,6 +120,38 @@ class _BaseFileChooserDialog(gtk.Dialog):
         ffilter.set_name(name)
         self.filechooser.add_filter(ffilter)
         return ffilter
+
+    def add_archive_filters(self):
+        """Add archive filters to the filechooser.
+        """
+        ffilter = gtk.FileFilter()
+        ffilter.set_name(_('All archives'))
+        self.filechooser.add_filter(ffilter)
+        supported_formats = archive_tools.get_supported_formats()
+        for name in sorted(supported_formats):
+            mime_types, extensions = supported_formats[name]
+            patterns = ['*.%s' % ext for ext in extensions]
+            self.add_filter(_('%s archives') % name, mime_types, patterns)
+            for mime in mime_types:
+                ffilter.add_mime_type(mime)
+            for pat in patterns:
+                ffilter.add_pattern(pat)
+
+    def add_image_filters(self):
+        """Add images filters to the filechooser.
+        """
+        ffilter = gtk.FileFilter()
+        ffilter.set_name(_('All images'))
+        self.filechooser.add_filter(ffilter)
+        supported_formats = image_tools.get_supported_formats()
+        for name in sorted(supported_formats):
+            mime_types, extensions = supported_formats[name]
+            patterns = ['*.%s' % ext for ext in extensions]
+            self.add_filter(_('%s images') % name, mime_types, patterns)
+            for mime in mime_types:
+                ffilter.add_mime_type(mime)
+            for pat in patterns:
+                ffilter.add_pattern(pat)
 
     def _filter(self, filter_info, data):
         """ Callback function used to determine if a file
@@ -265,8 +262,8 @@ class _BaseFileChooserDialog(gtk.Dialog):
             path = None
 
         if path and os.path.isfile(path):
-            thumbnailer = thumbnail_tools.Thumbnailer()
-            thumbnailer.set_size(128, 128)
+            thumbnailer = thumbnail_tools.Thumbnailer(size=(128, 128),
+                                                      archive_support=True)
             thumbnailer.thumbnail_finished += self._preview_thumbnail_finished
             thumbnailer.thumbnail(path, async=True)
         else:

@@ -5,6 +5,8 @@ extraction and adding new archive formats. """
 
 import os
 import errno
+import threading
+
 from mcomix import portability
 from mcomix import i18n
 from mcomix import process
@@ -24,6 +26,12 @@ class BaseArchive(object):
 
         self.archive = archive
         self._password = None
+        self._event = threading.Event()
+        if self.support_concurrent_extractions:
+            # When multiple concurrent extractions are supported,
+            # we need a lock to handle concurent calls to _get_password.
+            self._lock = threading.Lock()
+            self._waiting_for_password = False
 
     def iter_contents(self):
         """ Generator for listing the archive contents.
@@ -106,18 +114,31 @@ class BaseArchive(object):
         return open(dst_path, 'wb')
 
     @callback.Callback
-    def _password_required(self, event):
+    def _password_required(self):
         """ Asks the user for a password and sets <self._password>.
         If <self._password> is None, no password has been requested yet.
         If an empty string is set, assume that the user did not provide
         a password. """
 
-        password = archive.ask_for_password()
+        password = archive.ask_for_password(self.archive)
         if password is None:
             password = ""
 
         self._password = password
-        event.set()
+        self._event.set()
+
+    def _get_password(self):
+        ask_for_password = self._password is None
+        # Don't trigger concurrent password dialogs.
+        if ask_for_password and self.support_concurrent_extractions:
+            with self._lock:
+                if self._waiting_for_password:
+                    ask_for_password = False
+                else:
+                    self._waiting_for_password = True
+        if ask_for_password:
+            self._password_required()
+        self._event.wait()
 
 class NonUnicodeArchive(BaseArchive):
     """ Base class for archives that manage a conversion of byte member names ->
@@ -149,8 +170,8 @@ class ExternalExecutableArchive(NonUnicodeArchive):
     """ For archives that are extracted by spawning an external
     application. """
 
-    """ Since we're using an external program for extraction, concurrent
-    calls are supported. """
+    # Since we're using an external program for extraction,
+    # concurrent calls are supported.
     support_concurrent_extractions = True
 
     def __init__(self, archive):
@@ -186,18 +207,16 @@ class ExternalExecutableArchive(NonUnicodeArchive):
         if not self._get_executable():
             return
 
-        proc = process.Process([self._get_executable()] +
-            self._get_list_arguments() +
-            [self.archive])
-        fd = proc.spawn()
-
+        proc = process.popen([self._get_executable()] +
+                             self._get_list_arguments() +
+                             [self.archive])
         try:
-            for line in fd.readlines():
+            for line in proc.stdout:
                 filename = self._parse_list_output_line(line.rstrip(os.linesep))
                 if filename is not None:
                     yield self._unicode_filename(filename)
         finally:
-            fd.close()
+            proc.stdout.close()
             proc.wait()
 
         self.filenames_initialized = True
@@ -213,20 +232,13 @@ class ExternalExecutableArchive(NonUnicodeArchive):
         if not self.filenames_initialized:
             self.list_contents()
 
-        proc = process.Process([self._get_executable()] +
-            self._get_extract_arguments() +
-            [self.archive, self._original_filename(filename)])
-        fd = proc.spawn()
-
-        if fd:
-            # Create new file
-            new = self._create_file(os.path.join(destination_dir, filename))
-            stdout, stderr = proc.communicate()
-            new.write(stdout)
-            new.close()
-
-            # Wait for process to finish
-            fd.close()
-            proc.wait()
+        output = self._create_file(os.path.join(destination_dir, filename))
+        try:
+            process.call([self._get_executable()] +
+                         self._get_extract_arguments() +
+                         [self.archive, self._original_filename(filename)],
+                         stdout=output)
+        finally:
+            output.close()
 
 # vim: expandtab:sw=4:ts=4

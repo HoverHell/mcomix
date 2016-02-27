@@ -12,13 +12,13 @@ from mcomix import image_tools
 class _AboutDialog(gtk.AboutDialog):
 
     def __init__(self, window):
-        gtk.AboutDialog.__init__(self)
+        super(_AboutDialog, self).__init__()
 
         self.set_name(constants.APPNAME)
         self.set_program_name(constants.APPNAME)
         self.set_version(constants.VERSION)
         self.set_website('https://sourceforge.net/p/mcomix/wiki/')
-        self.set_copyright('Copyright © 2005-2014')
+        self.set_copyright('Copyright © 2005-2016')
 
         icon_data = pkg_resources.resource_string('mcomix.images', 'mcomix.png')
         pixbuf = image_tools.load_pixbuf_data(icon_data)

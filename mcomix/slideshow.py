@@ -5,7 +5,7 @@ import gobject
 
 from mcomix.preferences import prefs
 
-class Slideshow:
+class Slideshow(object):
 
     """Slideshow handler that manages starting and stopping of slideshows."""
 
@@ -31,7 +31,7 @@ class Slideshow:
 
             self._window.scroll_with_flipping(0, prefs['number of pixels to scroll per slideshow event'])
         else:
-            self._window.next_page()
+            self._window.flip_page(+1)
 
         return True
 

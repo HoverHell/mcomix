@@ -24,7 +24,7 @@ class _CollectionArea(gtk.ScrolledWindow):
     """
 
     def __init__(self, library):
-        gtk.ScrolledWindow.__init__(self)
+        super(_CollectionArea, self).__init__()
         self._library = library
         self.set_policy(gtk.POLICY_NEVER, gtk.POLICY_AUTOMATIC)
 
@@ -146,7 +146,7 @@ class _CollectionArea(gtk.ScrolledWindow):
 
     def add_collection(self, *args):
         """Add a new collection to the library, through a dialog."""
-        add_dialog = message_dialog.MessageDialog(None, 0, gtk.MESSAGE_INFO,
+        add_dialog = message_dialog.MessageDialog(self._library, 0, gtk.MESSAGE_INFO,
             gtk.BUTTONS_OK_CANCEL)
         add_dialog.set_auto_destroy(False)
         add_dialog.set_default_response(gtk.RESPONSE_OK)

@@ -3,6 +3,7 @@
 import gc
 import sys
 import os
+from distutils import spawn
 
 from mcomix import log
 from mcomix import i18n
@@ -15,91 +16,129 @@ except ImportError:
     import subprocess
     _using_subprocess32 = False
 
-NULL = open(os.devnull, 'wb')
 
-class Process:
+NULL = open(os.devnull, 'r+b')
+PIPE = subprocess.PIPE
+STDOUT = subprocess.STDOUT
 
-    """The subprocess and popen2 modules in Python are broken (see issue
-    #1336). The problem (i.e. complete crash) they can cause happen fairly
-    often (once is too often) in MComix when calling "rar" or "unrar" to
-    extract specific files from archives. We roll our own very simple
-    process spawning module here instead.
-    """
-    # TODO: I can no longer reproduce the issue. Check if this version of
-    # process.py still solves it.
-
-    def __init__(self, args):
-        """Setup a Process where <args> is a sequence of arguments that defines
-        the process, e.g. ['ls', '-a'].
-        """
-        # Convert argument vector to system's file encoding where necessary
-        # to prevent automatic conversion when appending Unicode strings
-        # to byte strings later on.
-        self._args = []
-        for arg in args:
-            if isinstance(arg, unicode):
-                self._args.append(arg.encode(sys.getfilesystemencoding()))
-            else:
-                self._args.append(arg)
-
-        self._proc = None
-
-    def _exec(self, stdin, stderr):
-        """Spawns the process, and returns its stdout.
-        (NOTE: separate function to make python2.4 exception syntax happy)
-        """
-        try:
-            self._proc = subprocess.Popen(self._args, stdout=subprocess.PIPE,
-                    stdin=stdin, stderr=stderr,
-                    startupinfo=self._startupinfo())
-            return self._proc.stdout
-        except Exception, ex:
-            cmd = len(self._args) > 0 and self._args[0] or "<invalid>"
-            log.info((
-                _('! Error spawning process "%(command)s": %(error)s.')
-                + u' '
-                + _('"%(command)s" must be on your system PATH to be found.')) %
-                { 'command' : unicode(cmd, errors='replace'),
-                  'error' : unicode(str(ex), errors='replace')})
-            return None
-
-    def _startupinfo(self):
-        """ Creates a STARTUPINFO structure on Windows (to hide spawned
-        unextract windows). Does nothing on other platforms. """
-        if sys.platform == 'win32':
-            info = subprocess.STARTUPINFO()
-            STARTF_USESHOWWINDOW = 0x1
-            SW_HIDE = 0x0
-            info.dwFlags = STARTF_USESHOWWINDOW
-            info.wShowWindow = SW_HIDE
-            return info
+# Convert argument vector to system's file encoding where necessary
+# to prevent automatic conversion when appending Unicode strings
+# to byte strings later on.
+def _fix_args(args):
+    fixed_args = []
+    for arg in args:
+        if isinstance(arg, unicode):
+            fixed_args.append(arg.encode(sys.getfilesystemencoding()))
         else:
-            return None
+            fixed_args.append(arg)
+    return fixed_args
 
-    # Cannot spawn processes with PythonW/Win32 unless stdin and
-    # stderr are redirected to a pipe/devnull as well.
-    def spawn(self, stdin=subprocess.PIPE, stderr=NULL):
-        """Spawn the process defined by the args in __init__(). Return a
-        file-like object linked to the spawned process' stdout.
-        """
-        try:
-            if not _using_subprocess32:
-                gc.disable() # Avoid Python issue #1336!
-            return self._exec(stdin, stderr)
-        finally:
-            if not _using_subprocess32:
-                gc.enable()
+def _get_creationflags():
+    if 'win32' == sys.platform:
+        # Do not create a console window.
+        return 0x08000000
+    else:
+        return 0
 
-    def wait(self):
-        """Wait for the process to terminate."""
-        if self._proc is None:
-            raise Exception('Process not spawned.')
-        return self._proc.wait()
+# Cannot spawn processes with PythonW/Win32 unless stdin
+# and stderr are redirected to a pipe/devnull as well.
+def call(args, stdin=NULL, stdout=NULL, stderr=NULL):
+    return 0 == subprocess.call(_fix_args(args), stdin=stdin,
+                                stdout=stdout, stderr=stderr,
+                                creationflags=_get_creationflags())
 
-    def communicate(self, input=None):
-        """ Buffer all output from the kernel pipe buffer
-        before returning a tuple (stdoutdata, stderrdata). """
-        return self._proc.communicate(input)
+def popen(args, stdin=NULL, stdout=PIPE, stderr=NULL):
+    if not _using_subprocess32:
+        gc.disable() # Avoid Python issue #1336!
+    try:
+        return subprocess.Popen(_fix_args(args), stdin=stdin,
+                                stdout=stdout, stderr=stderr,
+                                creationflags=_get_creationflags())
+    finally:
+        if not _using_subprocess32:
+            gc.enable()
+
+
+if 'win32' == sys.platform:
+    _exe_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
+
+def find_executable(candidates, workdir=None, is_valid_candidate=None):
+    """ Find executable in path.
+
+    Return an absolute path to a valid executable or None.
+
+    <workdir> default to the current working directory if not set.
+
+    <is_valid_candidate> is an optional function that must return True
+    if the path passed in argument is a valid candidate (to check for
+    version number, symlinks to an unsupported variant, etc...).
+
+    If a candidate has a directory component,
+    it will be checked relative to <workdir>.
+
+    On Windows:
+
+    - '.exe' will be appended to each candidate if not already
+
+    - MComix executable directory is prepended to the path on Windows
+      (to support embedded tools/executables in the distribution).
+
+    - <workdir> will be inserted first in the path.
+
+    On Unix:
+
+    - a valid candidate must have execution right
+
+    """
+    if workdir is None:
+        workdir = os.getcwd()
+    workdir = os.path.abspath(workdir)
+
+    search_path = os.environ['PATH'].split(os.pathsep)
+    if 'win32' == sys.platform:
+        if workdir is not None:
+            search_path.insert(0, workdir)
+        search_path.insert(0, _exe_dir)
+
+    is_valid_exe = lambda exe: \
+            os.path.isfile(exe) and \
+            os.access(exe, os.R_OK|os.X_OK)
+
+    if is_valid_candidate is None:
+        is_valid = is_valid_exe
+    else:
+        is_valid = lambda exe: \
+                is_valid_exe(exe) and \
+                is_valid_candidate(exe)
+
+    for name in candidates:
+
+        # On Windows, must end with '.exe'
+        if 'win32' == sys.platform:
+            if not name.endswith('.exe'):
+                name = name + '.exe'
+
+        # Absolute path?
+        if os.path.isabs(name):
+            if is_valid(name):
+                return name
+
+        # Does candidate have a directory component?
+        elif os.path.dirname(name):
+            # Yes, check relative to working directory.
+            path = os.path.normpath(os.path.join(workdir, name))
+            if is_valid(path):
+                return path
+
+        # Look in search path.
+        else:
+            for dir in search_path:
+                path = os.path.abspath(os.path.join(dir, name))
+                if is_valid(path):
+                    return path
+
+    return None
+
 
 def Win32Popen(cmd):
     """ Spawns a new process on Win32. cmd is a list of parameters. 
@@ -150,6 +189,9 @@ def Win32Popen(cmd):
     cmdline = subprocess.list2cmdline(cmd)
     buffer = ctypes.create_unicode_buffer(cmdline)
 
+    # Resolve executable path.
+    exe = find_executable((cmd[0],))
+
     # Some required structures for the method call...
     startupinfo = StartupInfo()
     ctypes.memset(ctypes.addressof(startupinfo), 0, ctypes.sizeof(startupinfo))
@@ -157,7 +199,7 @@ def Win32Popen(cmd):
     processinfo = ProcessInformation()
 
     # Spawn new process
-    success = ctypes.windll.kernel32.CreateProcessW(cmd[0], buffer,
+    success = ctypes.windll.kernel32.CreateProcessW(exe, buffer,
             None, None, False, 0, None, None, ctypes.byref(startupinfo),
             ctypes.byref(processinfo))
 

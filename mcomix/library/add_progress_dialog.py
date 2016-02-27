@@ -18,13 +18,12 @@ class _AddLibraryProgressDialog(gtk.Dialog):
         """Adds the books at <paths> to the library, and also to the
         <collection>, unless it is None.
         """
-        gtk.Dialog.__init__(self, _('Adding books'), library,
+        super(_AddLibraryProgressDialog, self).__init__(_('Adding books'), library,
             gtk.DIALOG_MODAL, (gtk.STOCK_STOP, gtk.RESPONSE_CLOSE))
 
         self._window = window
         self._destroy = False
         self.set_size_request(400, -1)
-        self.set_has_separator(False)
         self.set_resizable(False)
         self.set_border_width(4)
         self.connect('response', self._response)
@@ -71,7 +70,7 @@ class _AddLibraryProgressDialog(gtk.Dialog):
             bar.set_fraction(total_added / total_paths_float)
 
             while gtk.events_pending():
-                gtk.main_iteration(False)
+                gtk.main_iteration_do(False)
 
             if self._destroy:
                 return

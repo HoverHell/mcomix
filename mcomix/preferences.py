@@ -78,8 +78,10 @@ prefs = {
     'sharpness': 1.0,
     'auto contrast': False,
     'max pages to cache': 7,
+    'window x': 0,
+    'window y': 0,
     'window height': 600,
-    'window width': 500,
+    'window width': 640,
     'pageselector height': -1,
     'pageselector width': -1,
     'library cover size': 125,
@@ -94,7 +96,7 @@ prefs = {
     'max threads': 3,
     'max extract threads': 1,
     'wrap mouse scroll': False,
-    'scaling quality': 1,  # gtk.gdk.INTERP_TILES
+    'scaling quality': 2,  # gtk.gdk.INTERP_BILINEAR
     'escape quits': False,
     'fit to size mode': constants.ZOOM_MODE_HEIGHT,
     'fit to size px': 1800,

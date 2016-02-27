@@ -6,6 +6,8 @@ import gobject
 import pango
 import textwrap
 
+from mcomix import image_tools
+
 class OnScreenDisplay(object):
 
     """ The OSD shows information such as currently opened file, archive and
@@ -50,10 +52,6 @@ class OnScreenDisplay(object):
         rect = (pos_x - 10, pos_y - 20,
                 layout_width + 20, layout_height + 20)
 
-        # Catch up on events - OSD doesn't work otherwise after just starting up.
-        while gtk.events_pending():
-            gtk.main_iteration(False)
-        # Draw OSD
         self._draw_osd(layout, rect)
 
         self._last_osd_rect = rect
@@ -63,8 +61,10 @@ class OnScreenDisplay(object):
 
     def clear(self):
         """ Removes the OSD. """
-        self._clear_osd()
+        if self._timeout_event:
+            gobject.source_remove(self._timeout_event)
         self._timeout_event = None
+        self._clear_osd()
         return 0 # To unregister gobject timer event
 
     def _wrap_text(self, text, width=70):
@@ -121,13 +121,11 @@ class OnScreenDisplay(object):
         self._clear_osd(osd_region)
 
         # Set up drawing context
-        colormap = gtk.gdk.colormap_get_system()
-        black = colormap.alloc_color(5000, 5000, 5000)
-        white = colormap.alloc_color("white")
-        gc = window.new_gc(foreground=black, background=black)
+        gc = window.new_gc(foreground=image_tools.GTK_GDK_COLOR_BLACK,
+                           background=image_tools.GTK_GDK_COLOR_BLACK)
 
         window.draw_rectangle(gc, True, *rect)
-        window.draw_layout(gc, rect[0] + 10, rect[1] + 10, layout, foreground=white)
+        window.draw_layout(gc, rect[0] + 10, rect[1] + 10, layout, foreground=image_tools.GTK_GDK_COLOR_WHITE)
         window.end_paint()
 
 # vim: expandtab:sw=4:ts=4

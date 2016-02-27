@@ -2,7 +2,6 @@
 import sys
 import os
 import re
-import subprocess
 import gtk
 import gobject
 
@@ -79,12 +78,9 @@ class OpenWithCommand(object):
 
         current_dir = os.getcwd()
         try:
-            if self.get_cwd() and len(self.get_cwd().strip()) > 0:
-                directories = self.parse(window, text=self.get_cwd())
-                if self.is_valid_workdir(window):
-                    os.chdir(directories[0])
-                else:
-                    raise OpenWithException(_('Invalid working directory.'))
+            if self.is_valid_workdir(window):
+                workdir = self.parse(window, text=self.get_cwd())[0]
+                os.chdir(workdir)
 
             # Redirect process output to null here?
             # FIXME: Close process when finished to avoid zombie process
@@ -92,7 +88,7 @@ class OpenWithCommand(object):
             if sys.platform == 'win32':
                 proc = process.Win32Popen(args)
             else:
-                proc = subprocess.Popen(args)
+                proc = process.popen(args, stdout=process.NULL)
             del proc
 
         except Exception, e:
@@ -115,25 +111,17 @@ class OpenWithCommand(object):
         else:
             workdir = os.getcwd()
 
-        arg = args[0]
-        fullcmd = os.path.join(workdir, arg)
-        if os.path.isfile(fullcmd) and os.access(fullcmd, os.R_OK|os.X_OK):
-            return True
+        exe = process.find_executable((args[0],), workdir=workdir)
 
-        for path in os.environ["PATH"].split(os.pathsep):
-            path = path.strip('"')
-            exe = os.path.join(path, arg)
-            if os.path.isfile(exe) and os.access(exe, os.R_OK|os.X_OK):
-                return True
+        return exe is not None
 
-        return False
-
-    def is_valid_workdir(self, window):
+    def is_valid_workdir(self, window, allow_empty=False):
         """ Check if the working directory is valid. """
-        if len(self.get_cwd().strip()) == 0:
-            return True
+        cwd = self.get_cwd().strip()
+        if not cwd:
+            return allow_empty
 
-        args = self.parse(window, text=self.get_cwd())
+        args = self.parse(window, text=cwd)
         if len(args) > 1:
             return False
 
@@ -261,16 +249,21 @@ class OpenWithCommand(object):
                 return os.path.dirname(os.path.dirname(window.imagehandler.get_path_to_page()))
         else:
             raise OpenWithException(
-                _("Invalid escape sequence: %%%s") % identifier);
+                _("Invalid escape sequence: %%%s") % identifier)
 
     def _get_context_type(self, window, check_restrictions=True):
         if not check_restrictions:
             return DEBUGGING_CONTEXT # ignore context, reflect variable name
-        if not(window and window.filehandler.file_loaded):
-            return NO_FILE_CONTEXT # no file loaded
-        if not(window and window.filehandler.archive_type is None):
-            return IMAGE_FILE_CONTEXT|ARCHIVE_CONTEXT # archive loaded
-        return IMAGE_FILE_CONTEXT # image loaded (no archive)
+        context = 0
+        if not window.filehandler.file_loaded:
+            context = NO_FILE_CONTEXT # no file loaded
+        elif window.filehandler.archive_type is not None:
+            context = IMAGE_FILE_CONTEXT|ARCHIVE_CONTEXT # archive loaded
+        else:
+            context = IMAGE_FILE_CONTEXT # image loaded (no archive)
+        if not window.imagehandler.get_current_page():
+            context &= ~IMAGE_FILE_CONTEXT # empty archive
+        return context
 
 
 class OpenWithEditor(gtk.Dialog):
@@ -279,7 +272,7 @@ class OpenWithEditor(gtk.Dialog):
     the external model (i.e. preferences) only when properly closed. """
 
     def __init__(self, window, openwithmanager):
-        gtk.Dialog.__init__(self, _('Edit external commands'), parent=window)
+        super(OpenWithEditor, self).__init__(_('Edit external commands'), parent=window)
         self.set_destroy_with_parent(True)
         self._window = window
         self._openwith = openwithmanager
@@ -307,7 +300,7 @@ class OpenWithEditor(gtk.Dialog):
         self._test_field.set_property('editable', gtk.FALSE)
         self._exec_label = gtk.Label()
         self._exec_label.set_alignment(0, 0)
-        self._set_exec_text('');
+        self._set_exec_text('')
         self._save_button = self.add_button(gtk.STOCK_SAVE, gtk.RESPONSE_ACCEPT)
         self.set_default_response(gtk.RESPONSE_ACCEPT)
 
@@ -315,9 +308,9 @@ class OpenWithEditor(gtk.Dialog):
         self._setup_table()
 
         self.connect('response', self._response)
-        self._window.draw_image += lambda *args, **kwargs: self.test_command()
+        self._window.page_changed += self.test_command
         self._window.filehandler.file_opened += self.test_command
-        self._window.filehandler.close_file += lambda *args: self.test_command()
+        self._window.filehandler.file_closed += self.test_command
 
         self.resize(600, 400)
 
@@ -372,7 +365,7 @@ class OpenWithEditor(gtk.Dialog):
             self._test_field.set_text(" ".join(args))
             self._run_button.set_sensitive(True)
 
-            if not command.is_valid_workdir(self._window):
+            if not command.is_valid_workdir(self._window, allow_empty=True):
                 self._set_exec_text(
                     _('"%s" does not have a valid working directory.') % command.get_label())
             elif not command.is_executable(self._window):

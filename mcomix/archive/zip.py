@@ -3,12 +3,18 @@
 """ Unicode-aware wrapper for zipfile.ZipFile. """
 
 import os
-import zipfile
-import threading
 from contextlib import closing
 
 from mcomix import log
 from mcomix.archive import archive_base
+
+# Try to use czipfile if available as it's much faster at decryption.
+try:
+    import czipfile as zipfile
+except ImportError:
+    log.warning('czipfile not available! using zipfile')
+    import zipfile
+
 
 def is_py_supported_zipfile(path):
     """Check if a given zipfile has all internal files stored with Python supported compression
@@ -30,18 +36,8 @@ class ZipArchive(archive_base.NonUnicodeArchive):
         self._password = None
 
     def iter_contents(self):
-        if self._encryption_supported \
-            and self._has_encryption()\
-            and self._password is None:
-
-            # Wait for the main thread to set self._password
-            event = threading.Event()
-            self._password_required(event)
-            event.wait()
-
-        if self._encryption_supported \
-            and self._password is not None:
-
+        if self._encryption_supported and self._has_encryption():
+            self._get_password()
             self.zip.setpassword(self._password)
 
         for filename in self.zip.namelist():

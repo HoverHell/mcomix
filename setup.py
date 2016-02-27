@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python2
 # -*- coding: utf-8 -*-
 
 """ MComix installation routines.
@@ -11,15 +11,9 @@ Example usage:
     $ ./setup.py install --single-version-externally-managed --root /tmp/mcomix --prefix /usr
 """
 
-import sys
 import os
 import glob
 import setuptools
-
-try:
-    import py2exe
-except ImportError:
-    pass
 
 from mcomix import constants
 
@@ -51,12 +45,14 @@ setup_kwa = dict(
     name = constants.APPNAME.lower(),
     version = constants.VERSION,
     packages = ['mcomix', 'mcomix.archive', 'mcomix.library',
-        'mcomix.messages', 'mcomix.images'],
+        'mcomix.messages', 'mcomix.images', 'mcomix.win32'],
     package_data = {
         'mcomix.messages' : get_data_patterns('mcomix/messages', '*.mo'),
         'mcomix.images' : images },
     entry_points = {
-        'console_scripts' : [ 'mcomix = mcomix.run:run' ] },
+        'console_scripts' : [ 'mcomix = mcomix.run:run' ],
+        'setuptools.installation': [ 'eggsecutable=mcomix.run:run' ],
+    },
     test_suite = "test",
     requires = ['pygtk (>=2.12.0)', 'PIL (>=1.15)'],
     install_requires = ['setuptools'],
@@ -100,30 +96,19 @@ setup_kwa = dict(
              'mime/icons/48x48/application-x-cbt.png'])],
 
     # Package metadata
-    maintainer = 'Oddegamra',
-    maintainer_email = 'oddegamra@gmx.org',
+    maintainer = 'Ark',
+    maintainer_email = 'https://sourceforge.net/u/aaku/profile/',
     url = 'http://mcomix.sourceforge.net',
     description = 'GTK comic book viewer',
-    long_description = 'MComix is a fork of Comix and is a user-friendly, customizable image viewer. '
-        'It is specifically designed to handle comic books.',
+    long_description = 'MComix is a user-friendly, customizable image viewer. '
+        'It is specifically designed to handle comic books (both Western comics and manga) '
+        'and supports a variety of container formats (including CBR, CBZ, CB7, CBT, LHA and PDF). '
+        'MComix is a fork of Comix.',
     license = "License :: OSI Approved :: GNU General Public License (GPL)",
     download_url = "http://sourceforge.net/projects/mcomix/files",
     platforms = ['Operating System :: POSIX :: Linux',
         'Operating System :: Microsoft :: Windows',
         'Operating System :: POSIX :: BSD'],
-
-    # Py2Exe options
-    windows = [{ 'script' : 'mcomixstarter.py',
-        'icon_resources' : [(1, "mcomix/images/mcomix.ico")]  }],
-    options = {
-        'py2exe' : {
-            'packages' : 'mcomix.messages, mcomix.images, encodings',
-            'includes' : 'cairo, pango, pangocairo, atk, gobject, gio, gtk.keysyms',
-            'dist_dir' : 'dist_py2exe',
-            'excludes' : ['_ssl', 'pyreadline', 'difflib', 'doctest', 
-                          'pdb', 'unittest', 'inspect']
-        }
-    }
 )
 
 

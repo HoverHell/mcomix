@@ -5,15 +5,16 @@ About
 -----
 
   MComix is a user-friendly, customizable image viewer. It is specifically
-  designed to handle comic books, but also serves as a generic viewer. It
-  reads images in ZIP, RAR, 7Zip or tar archives as well as plain image files. It
-  is written in Python and uses GTK+ through the PyGTK bindings.
+  designed to handle comic books (both Western comics and manga) and supports a
+  variety of container formats (including CBR, CBZ, CB7, CBT, LHA and PDF).
+  MComix is a fork of Comix. It is written in Python and uses GTK+ through the
+  PyGTK bindings.
 
 Installation 
 ------------
 
 
-  Run "python setup.py install" as root. This will install MComix in the
+  Run "python2 setup.py install" as root. This will install MComix in the
   site-packages folder of Python. An executable "mcomix" will be placed in
   /usr/bin.
 
@@ -23,14 +24,14 @@ Installation
 
   Example:
 
-      # python setup.py --prefix /usr install
+      # python2 setup.py --prefix /usr install
 
   As an example of how to install MComix from the downloaded tar.gz file, run
   as the root user (via su or sudo):
 
       # tar -xzf mcomix-x.y.tar.gz
       # cd mcomix-x.y
-      # python setup.py install
+      # python2 setup.py install
 
   If you don't want to install MComix in some system directory, you can just
   execute the file mcomixstarter.py in the unpacked MComix directory to
@@ -43,7 +44,7 @@ Installation
   man page, or other optional files normally placed into /usr/share. To do so,
   setup.py must be called with a additonal options:
 
-      # python setup.py install --single-version-externally-managed \
+      # python2 setup.py install --single-version-externally-managed \
 	                            --prefix /usr --root / --record mcomix-files.txt
 
   This sort of installation is only recommended for advanced users, as no
@@ -54,9 +55,8 @@ Installation
 Dependencies 
 ------------
 
-  MComix needs Python 2.5, Setuptools 0.6, PyGTK 2.12 and PIL (Python
-  Imaging Library) 1.1.5 or newer to function. It is possible to use
-  Pillow (an up-to-date fork) as drop-in replacement for PIL.
+  MComix needs Python 2.5, Setuptools 0.6, PyGTK 2.12 and Pillow (Python
+  Imaging Library Fork) 2.2.1 or newer to function.
 
   To use the library you need pysqlite (which is usually included in the
   standard library for Python 2.5 and later).
@@ -74,7 +74,7 @@ Dependencies
   substitute for both "unrar" and "lha", but extraction of Unicode filenames
   on Windows will be broken in that case.
 
-  To read PDF files, MComix can use the tools provided by mupdf, namely
+  To read PDF files, MComix can use the tools provided by MuPDF, namely
   mutool and mudraw.
 
 Credits 

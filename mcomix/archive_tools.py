@@ -6,47 +6,115 @@ import shutil
 import zipfile
 import tarfile
 import tempfile
+import operator
 
+from mcomix import image_tools
 from mcomix import constants
 from mcomix import log
-from mcomix.archive import zip
-from mcomix.archive import zip_external
-from mcomix.archive import rar
-from mcomix.archive import tar
-from mcomix.archive import sevenzip
-from mcomix.archive import lha
-from mcomix.archive import pdf
+from mcomix.archive import (
+    lha_external,
+    pdf_external,
+    rar,
+    rar_external,
+    sevenzip_external,
+    tar,
+    zip,
+    zip_external,
+)
+
+# Handlers for each archive type.
+_HANDLERS = {
+    constants.ZIP: (
+        zip.ZipArchive,
+    ),
+    # Prefer 7z over zip executable for encryption and Unicode support.
+    constants.ZIP_EXTERNAL: (
+        sevenzip_external.SevenZipArchive,
+        zip_external.ZipArchive
+    ),
+    constants.TAR: (
+        tar.TarArchive,
+    ),
+    constants.GZIP: (
+        tar.TarArchive,
+    ),
+    constants.BZIP2: (
+        tar.TarArchive,
+    ),
+    constants.XZ: (
+        # No LZMA support in Python 2 tarfile module.
+        sevenzip_external.TarArchive,
+    ),
+    constants.RAR: (
+        rar.RarArchive,
+        rar_external.RarArchive,
+        # Last resort: some versions of 7z support RAR.
+        sevenzip_external.SevenZipArchive,
+    ),
+    # Prefer 7z over lha executable for Unicode support.
+    constants.LHA: (
+        sevenzip_external.SevenZipArchive,
+        lha_external.LhaArchive,
+    ),
+    constants.SEVENZIP: (
+        sevenzip_external.SevenZipArchive,
+    ),
+    constants.PDF: (
+        pdf_external.PdfArchive,
+    ),
+}
+
+def _get_handler(archive_type):
+    """ Return best archive class for format <archive_type> """
+
+    for handler in _HANDLERS[archive_type]:
+        if not hasattr(handler, 'is_available'):
+            return handler
+        if handler.is_available():
+            return handler
+
+def _is_available(archive_type):
+    """ Return True if a handler supporting the <archive_type> format is available """
+    return _get_handler(archive_type) is not None
 
 def szip_available():
-    return sevenzip.SevenZipArchive.is_available()
+    return _is_available(constants.SEVENZIP)
 
 def rar_available():
-    return rar.RarArchive.is_available() or szip_available()
+    return _is_available(constants.RAR)
 
 def lha_available():
-    return lha.LhaArchive.is_available() or szip_available()
+    return _is_available(constants.LHA)
 
-def get_supported_archive_regex():
-    """ Returns a compiled regular expression that contains extensions
-    of all currently supported file types, based on available applications.
+def pdf_available():
+    return _is_available(constants.PDF)
+
+def get_supported_formats():
+    supported_formats = {}
+    for name, formats, is_available in (
+        ('ZIP', constants.ZIP_FORMATS , True            ),
+        ('Tar', constants.TAR_FORMATS , True            ),
+        ('RAR', constants.RAR_FORMATS , rar_available() ),
+        ('7z' , constants.SZIP_FORMATS, szip_available()),
+        ('LHA', constants.LHA_FORMATS , lha_available() ),
+        ('PDF', constants.PDF_FORMATS , pdf_available() ),
+    ):
+        if is_available:
+            supported_formats[name] = formats
+    return supported_formats
+
+# Set supported archive extensions regexp from list of supported formats.
+SUPPORTED_ARCHIVE_REGEX = re.compile(r'\.(%s)$' %
+                                     '|'.join(sorted(reduce(
+                                         operator.add,
+                                         [map(re.escape, fmt[1]) for fmt
+                                          in get_supported_formats().values()]
+                                     ))), re.I)
+
+def is_archive_file(path):
+    """Return True if the file at <path> is a supported archive file.
     """
-    formats = list(constants.ZIP_FORMATS[1] + constants.TAR_FORMATS[1])
-
-    if szip_available():
-        formats.extend(constants.SZIP_FORMATS[1])
-
-    if rar_available():
-        formats.extend(constants.RAR_FORMATS[1])
-
-    if lha_available():
-        formats.extend(constants.LHA_FORMATS[1])
-
-    if pdf.PdfArchive.is_available():
-        formats.extend(constants.PDF_FORMATS[1])
-
-    # Strip leading glob characters "*." from file extensions
-    formats = [format[2:] for format in formats]
-    return re.compile(r'\.(' + '|'.join(formats) + r')\s*$', re.I)
+    return SUPPORTED_ARCHIVE_REGEX.search(path) is not None
 
 def archive_mime_type(path):
     """Return the archive type of <path> or None for non-archives."""
@@ -84,18 +152,18 @@ def archive_mime_type(path):
             if magic[0:4] == 'Rar!':
                 return constants.RAR
 
-            elif magic[0:4] == '7z\xBC\xAF':
+            if magic[0:4] == '7z\xBC\xAF':
                 return constants.SEVENZIP
 
             # Headers for TAR-XZ and TAR-LZMA that aren't supported by tarfile
-            elif magic[0:5] == '\xFD7zXZ' or magic[0:5] == ']\x00\x00\x80\x00':
-                return constants.SEVENZIP
+            if magic[0:5] == '\xFD7zXZ' or magic[0:5] == ']\x00\x00\x80\x00':
+                return constants.XZ
 
-            elif magic[2:] == '-l':
+            if magic[2:4] == '-l':
                 return constants.LHA
 
             if magic[0:4] == '%PDF':
-               return constants.PDF
+                return constants.PDF
 
     except Exception:
         log.warning(_('! Could not read %s'), path)
@@ -118,7 +186,7 @@ def get_archive_info(path):
         cleanup.append(archive.close)
 
         files = archive.list_contents()
-        num_pages = len(filter(constants.SUPPORTED_IMAGE_REGEX.search, files))
+        num_pages = len(filter(image_tools.SUPPORTED_IMAGE_REGEX.search, files))
         size = os.stat(path).st_size
 
         return (mime, num_pages, size)
@@ -133,32 +201,14 @@ def get_archive_handler(path, type=None):
     """
     if type is None:
         type = archive_mime_type(path)
+        if type is None:
+            return None
 
-    if type == constants.ZIP:
-        return zip.ZipArchive(path)
-    elif type == constants.ZIP_EXTERNAL and zip_external.ZipExecArchive.is_available():
-        return zip_external.ZipExecArchive(path)
-    elif type == constants.ZIP_EXTERNAL and sevenzip.SevenZipArchive.is_available():
-        log.info('Using Sevenzip for unsupported zip archives.')
-        return sevenzip.SevenZipArchive(path)
-    elif type in (constants.TAR, constants.GZIP, constants.BZIP2):
-        return tar.TarArchive(path)
-    elif type == constants.RAR and rar.RarArchive.is_available():
-        return rar.RarArchive(path)
-    elif type == constants.RAR and sevenzip.SevenZipArchive.is_available():
-        log.info('Using Sevenzip for RAR archives.')
-        return sevenzip.SevenZipArchive(path)
-    elif type == constants.SEVENZIP and sevenzip.SevenZipArchive.is_available():
-        return sevenzip.SevenZipArchive(path)
-    elif type == constants.LHA and lha.LhaArchive.is_available():
-        return lha.LhaArchive(path)
-    elif type == constants.LHA and sevenzip.SevenZipArchive.is_available():
-        log.info('Using Sevenzip for LHA archives.')
-        return sevenzip.SevenZipArchive(path)
-    elif type == constants.PDF and pdf.PdfArchive.is_available():
-        return pdf.PdfArchive(path)
-    else:
+    handler = _get_handler(type)
+    if handler is None:
         return None
+
+    return handler(path)
 
 def get_recursive_archive_handler(path, destination_dir, type=None):
     """ Same as <get_archive_handler> but the handler will transparently handle

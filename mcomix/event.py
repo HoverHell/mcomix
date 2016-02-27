@@ -3,7 +3,6 @@
 
 import urllib
 import gtk
-import gtk.gdk
 
 from mcomix.preferences import prefs
 from mcomix import constants
@@ -12,7 +11,7 @@ from mcomix import keybindings
 from mcomix import openwith
 
 
-class EventHandler:
+class EventHandler(object):
 
     def __init__(self, window):
         self._window = window
@@ -29,19 +28,28 @@ class EventHandler:
 
     def resize_event(self, widget, event):
         """Handle events from resizing and moving the main window."""
-        if not self._window.is_fullscreen:
-            prefs['window x'], prefs['window y'] = self._window.get_position()
-
-        if (event.width != self._window.width or
-            event.height != self._window.height):
-
-            if not self._window.is_fullscreen:
-                prefs['window width'] = event.width
-                prefs['window height'] = event.height
-
-            self._window.width = event.width
-            self._window.height = event.height
+        size = (event.width, event.height)
+        if size != self._window.previous_size:
+            self._window.previous_size = size
             self._window.draw_image()
+
+    def window_state_event(self, widget, event):
+        is_fullscreen = self._window.is_fullscreen
+        if self._window.was_fullscreen != is_fullscreen:
+            # Fullscreen state changed.
+            self._window.was_fullscreen = is_fullscreen
+            # Re-enable control, now that transition is complete.
+            toggleaction = self._window.actiongroup.get_action('fullscreen')
+            toggleaction.set_sensitive(True)
+            if is_fullscreen:
+                redraw = True
+            else:
+                # Only redraw if we don't need to restore geometry.
+                redraw = not self._window.restore_window_geometry()
+            self._window._update_toggles_sensitivity()
+            if redraw:
+                self._window.previous_size = self._window.get_size()
+                self._window.draw_image()
 
     def register_key_events(self):
         """ Registers keyboard events and their default binings, and hooks
@@ -479,7 +487,7 @@ class EventHandler:
             if not prefs['flip with horizontal wheel']:
                 return
             if not self._window.is_manga_mode:
-                self._window.next_page()
+                self._window.flip_page(+1)
             else:
                 self._previous_page_with_protection()
 
@@ -489,10 +497,13 @@ class EventHandler:
             if not self._window.is_manga_mode:
                 self._previous_page_with_protection()
             else:
-                self._window.next_page()
+                self._window.flip_page(+1)
 
     def mouse_press_event(self, widget, event):
         """Handle mouse click events on the main layout area."""
+
+        if self._window.was_out_of_focus:
+            return
 
         if event.button == 1:
             self._pressed_pointer_pos_x = event.x_root
@@ -544,11 +555,6 @@ class EventHandler:
     def mouse_move_event(self, widget, event):
         """Handle mouse pointer movement events."""
 
-        if not self._window.is_in_focus:
-            self._window.was_out_of_focus = True
-        else:
-            self._window.was_out_of_focus = False
-
         event = _get_latest_event_of_same_type(event)
 
         if 'GDK_BUTTON1_MASK' in event.state.value_names:
@@ -580,9 +586,6 @@ class EventHandler:
                 self._last_pointer_pos_x = event.x_root
                 self._last_pointer_pos_y = event.y_root
             self._drag_timer = event.time
-
-        else:
-            self._window.cursor_handler.refresh()
 
     def drag_n_drop_event(self, widget, context, x, y, selection, drag_id,
       eventtime):
@@ -621,15 +624,11 @@ class EventHandler:
 
         if y > 0 or (self._window.is_manga_mode and x < 0) or (
           not self._window.is_manga_mode and x > 0):
-            forwards_scroll = True
-
+            page_flipped = self._next_page_with_protection()
         else:
-            forwards_scroll = False
+            page_flipped = self._previous_page_with_protection()
 
-        if forwards_scroll:
-            return not self._next_page_with_protection()
-        else:
-            return not self._previous_page_with_protection()
+        return not page_flipped
 
     def _scroll_down(self):
         """ Scrolls down. """
@@ -736,23 +735,7 @@ class EventHandler:
         """ Switches a number of pages forwards/backwards. If C{single_step} is True,
         the page count will be advanced by only one page even in double page mode. """
         self._extra_scroll_events = 0
-        old_stepping = self._window.imagehandler.force_single_step
-        self._window.imagehandler.force_single_step = old_stepping or single_step
-
-        # TODO needs even better abstraction
-        if number_of_pages == 1:
-            self._window.next_page()
-        elif number_of_pages == -1:
-            self._window.previous_page()
-        elif number_of_pages == 10:
-            self._window.next_page_fast_forward()
-        elif number_of_pages == -10:
-            self._window.previous_page_fast_forward()
-        else:
-            assert False, "_flip_page(" + str(number_of_pages) + ")"
-
-        self._window.imagehandler.force_single_step = old_stepping
-
+        self._window.flip_page(number_of_pages, single_step=single_step)
 
     def _left_right_page_progress(self, number_of_pages=1):
         """ If number_of_pages is positive, this function advances the specified

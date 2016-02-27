@@ -73,31 +73,14 @@ def invalid_filesystem_chars():
 def get_default_locale():
     """ Gets the user's default locale. """
     if sys.platform == 'win32':
-        LOCALE_USER_DEFAULT = 0x0400
-        LOCALE_SISO639LANGNAME = 0x0059
-        LOCALE_SISO3166CTRYNAME = 0x005a
-
-        buffer = ctypes.create_unicode_buffer(9)
-        success = ctypes.windll.kernel32.GetLocaleInfoW(LOCALE_USER_DEFAULT, LOCALE_SISO639LANGNAME, buffer, 9)
-        if not success: return u"C"
-        lang = unicode(buffer.value)
-        success = ctypes.windll.kernel32.GetLocaleInfoW(LOCALE_USER_DEFAULT, LOCALE_SISO3166CTRYNAME, buffer, 9)
-        if not success: return u"C"
-        country = unicode(buffer.value)
-
-        return u"%s_%s" % (lang, country)
+        windll = ctypes.windll.kernel32
+        code = windll.GetUserDefaultUILanguage()
+        return locale.windows_locale[code]
     else:
-        lang, _ = locale.getdefaultlocale(['LANGUAGE', 'LC_ALL', 'LC_MESSAGE', 'LANG'])
+        lang, _ = locale.getdefaultlocale(['LANGUAGE', 'LC_ALL', 'LC_MESSAGES', 'LANG'])
         if lang:
             return unicode(lang)
         else:
             return u"C"
-
-# Py2Exe has an annoying habit of creating a log file for errors and nagging
-# the user about it every time the program closes. Try to prevent this
-# by manually redirecting stdout/stderr.
-if hasattr(sys, 'frozen'):
-    sys.stdout = cStringIO.StringIO()
-    sys.stderr = cStringIO.StringIO()
 
 # vim: expandtab:sw=4:ts=4

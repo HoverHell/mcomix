@@ -111,10 +111,21 @@ i18n.install_gettext()
 
 from mcomix.log import print_
 
+try:
+    from gi import pygtkcompat
+except ImportError:
+    pygtkcompat = None
+
+
 # Check for PyGTK and PIL dependencies.
 try:
-    import pygtk
-    pygtk.require('2.0')
+
+    if pygtkcompat is not None:
+        pygtkcompat.enable()
+        pygtkcompat.enable_gtk(version='2.0')
+    else:
+        import pygtk
+        pygtk.require('2.0')
 
     import gtk
     assert gtk.gtk_version >= (2, 12, 0)

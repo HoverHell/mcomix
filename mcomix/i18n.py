@@ -88,7 +88,10 @@ def install_gettext():
                     pkg_resources.resource_stream('mcomix.messages', resource))
             break
 
-    translation.install(unicode=True)
+    try:  # dirty-ish hack for py23
+        translation.install(**{'unicode': True})  # in the weird way because of a 2to3 bug
+    except TypeError:
+        translation.install()
 
     global _translation
     _translation = translation

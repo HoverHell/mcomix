@@ -47,7 +47,7 @@ images.extend([ os.path.basename(img)
     if os.path.basename(img) not in
         ('mcomix-large.png', )])
 
-setuptools.setup(
+setup_kwa = dict(
     name = constants.APPNAME.lower(),
     version = constants.VERSION,
     packages = ['mcomix', 'mcomix.archive', 'mcomix.library',
@@ -62,6 +62,7 @@ setuptools.setup(
     install_requires = ['setuptools'],
     zip_safe = False,
 
+    use_2to3=True,
     # Various MIME files that need to be copied to certain system locations on Linux.
     # Note that these files are only installed correctly if
     # --single-version-externally-managed is used as argument to "setup.py install".
@@ -125,4 +126,7 @@ setuptools.setup(
     }
 )
 
+
+if __name__ == '__main__':
+    setuptools.setup(**setup_kwa)
 # vim: expandtab:sw=4:ts=4

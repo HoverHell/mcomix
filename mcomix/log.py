@@ -41,7 +41,8 @@ def print_(*args, **options):
             else:
                 encoding = locale.getpreferredencoding() or sys.getfilesystemencoding()
 
-            sys.stdout.write(text.encode(encoding, 'replace'))
+            stdout = getattr(sys.stdout, 'buffer', sys.stdout)  # py23
+            stdout.write(text.encode(encoding, 'replace'))
 
     def print_win32(text):
         if not text: return

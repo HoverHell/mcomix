@@ -176,18 +176,8 @@ def run():
 
     # Check for PyGTK and PIL dependencies.
     try:
-        from gi import pygtkcompat
-    except ImportError:
-        pygtkcompat = None
-
-    try:
-
-        if pygtkcompat is not None:  # NOTE: untested (py3)
-            pygtkcompat.enable()
-            pygtkcompat.enable_gtk(version='2.0')
-        else:
-            import pygtk
-            pygtk.require('2.0')
+        import pygtk
+        pygtk.require('2.0')
 
         import gtk
         assert gtk.gtk_version >= (2, 12, 0)

@@ -101,7 +101,10 @@ prefs = {
     'fit to size mode': constants.ZOOM_MODE_HEIGHT,
     'fit to size px': 1800,
     'scan for new books on library startup': True,
-    'openwith commands': []  # (label, command) pairs
+    'openwith commands': [],  # (label, command) pairs
+
+    'extract page last directory enabled': False,
+    'extract page last directory': None,
 }
 
 def read_preferences_file():
@@ -159,6 +162,7 @@ def write_preferences_file():
     # file by adding a `{'version': constants.VERSION, 'prefs': config}`
     # dict or a list.  Adding an extra init line sounds bad too.
     json.dump(prefs, config_file, indent=2)
+    config_file.write('\n')  # console convenience
     config_file.close()
 
 # vim: expandtab:sw=4:ts=4

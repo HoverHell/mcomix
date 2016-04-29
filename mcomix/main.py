@@ -1012,10 +1012,20 @@ class MainWindow(gtk.Window):
             gtk.FILE_CHOOSER_ACTION_SAVE, (gtk.STOCK_OK, gtk.RESPONSE_ACCEPT,
             gtk.STOCK_CANCEL, gtk.RESPONSE_REJECT))
         save_dialog.set_current_name(suggested_name.encode('utf-8'))
+        use_last_dir = prefs['extract page last directory enabled']
+        if use_last_dir:
+            last_dir = prefs['extract page last directory']
+            if last_dir:
+                save_dialog.set_current_folder(last_dir)
 
         if save_dialog.run() == gtk.RESPONSE_ACCEPT and save_dialog.get_filename():
+            selected_filename = save_dialog.get_filename()
+            selected_filename = selected_filename.decode('utf-8')
+            if use_last_dir:
+                last_dir = os.path.dirname(selected_filename)
+                prefs['extract page last directory'] = last_dir
             shutil.copy(self.imagehandler.get_path_to_page(),
-                save_dialog.get_filename().decode('utf-8'))
+                selected_filename)
 
         save_dialog.destroy()
 
